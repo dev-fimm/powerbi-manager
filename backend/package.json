@@ -13,10 +13,10 @@
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "node dist/prisma/seed.js"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "node dist/prisma/seed.js"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
