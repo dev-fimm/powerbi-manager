@@ -6,6 +6,9 @@ import {
   assertContractAccess,
   assertContractWriteAccess,
   getAccessibleContractIds,
+  getGrantedIframeIds,
+  hasIframeLevelAccess,
+  isAdmin,
   requireAdmin,
   requireManager,
 } from '../middlewares/rbac';
@@ -23,6 +26,31 @@ import {
 export const contractRoutes = Router();
 
 contractRoutes.use(authenticate);
+
+/**
+ * Monta o `select` dos contadores (_count) conforme o perfil, para que os
+ * numeros exibidos nao revelem mais do que a conta pode enxergar:
+ *
+ *  - ADMIN         -> todos os iframes + total de contas no contrato.
+ *  - GESTOR        -> todos os iframes; sem users_count (quantas contas usam o
+ *                     contrato e informacao de gestao de acesso, exclusiva de
+ *                     ADMIN).
+ *  - VISUALIZADOR  -> apenas os paineis ATIVOS que lhe foram concedidos
+ *                     individualmente; sem users_count. Antes, este perfil via
+ *                     "8 paineis" num contrato onde so tinha acesso a 2.
+ */
+async function countSelectForUser(user: Express.AuthenticatedUser) {
+  if (isAdmin(user)) {
+    return { iframes: true, users: true } as const;
+  }
+
+  if (hasIframeLevelAccess(user)) {
+    const grantedIds = await getGrantedIframeIds(user);
+    return { iframes: { where: { isActive: true, id: { in: grantedIds } } } };
+  }
+
+  return { iframes: true };
+}
 
 /**
  * GET /api/contracts
@@ -51,7 +79,7 @@ contractRoutes.get(
     const contracts = await prisma.contract.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { iframes: true, users: true } } },
+      include: { _count: { select: await countSelectForUser(req.user!) } },
     });
 
     res.json(contracts.map(serializeContract));
@@ -67,7 +95,7 @@ contractRoutes.get(
 
     const contract = await prisma.contract.findUnique({
       where: { id },
-      include: { _count: { select: { iframes: true, users: true } } },
+      include: { _count: { select: await countSelectForUser(req.user!) } },
     });
     if (!contract) throw new NotFoundError('Contrato nao encontrado.');
 
@@ -98,7 +126,7 @@ contractRoutes.post(
           ? { users: { create: { userId: req.user!.id } } }
           : {}),
       },
-      include: { _count: { select: { iframes: true, users: true } } },
+      include: { _count: { select: await countSelectForUser(req.user!) } },
     });
 
     await recordLog(req, {
@@ -137,7 +165,7 @@ contractRoutes.put(
         endDate: data.end_date,
         status: data.status,
       },
-      include: { _count: { select: { iframes: true, users: true } } },
+      include: { _count: { select: await countSelectForUser(req.user!) } },
     });
 
     await recordLog(req, {

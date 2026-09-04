@@ -27,4 +27,11 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
+# A imagem oficial do nginx ja roda os workers como usuario "nginx"; apenas o
+# processo master fica como root, porque precisa disso para escutar na porta 80.
+# Se o ambiente exigir o container inteiro sem privilegio, troque a base por
+# nginxinc/nginx-unprivileged:alpine e ajuste a porta de 80 para 8080.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --spider --tries=1 http://127.0.0.1/ || exit 1
+
 CMD ["nginx", "-g", "daemon off;"]

@@ -7,9 +7,11 @@ import { authenticate, signToken } from '../middlewares/auth';
 import { requireAdmin } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
-import { ConflictError, UnauthorizedError } from '../utils/errors';
+import { AppError, ConflictError, UnauthorizedError } from '../utils/errors';
+import { checkPasswordPolicy } from '../utils/password';
+import { defaultScreensForRole } from '../utils/screens';
 import { serializeUser } from '../utils/serialize';
-import { loginSchema, registerSchema } from '../validators/schemas';
+import { changePasswordSchema, loginSchema, registerSchema } from '../validators/schemas';
 
 export const authRoutes = Router();
 
@@ -83,8 +85,19 @@ authRoutes.post(
 
     const passwordHash = await bcrypt.hash(password, env.bcryptSaltRounds);
 
+    const effectiveRole = role ?? Role.VISUALIZADOR;
+
     const user = await prisma.user.create({
-      data: { name, email, passwordHash, role: role ?? Role.VISUALIZADOR },
+      data: {
+        name,
+        email,
+        passwordHash,
+        role: effectiveRole,
+        // Mesmas telas iniciais de POST /users. Sem isto a coluna caia no
+        // default [] do schema e a conta nascia SEM nenhuma tela - o login
+        // funcionava, mas nao havia para onde navegar depois dele.
+        allowedScreens: defaultScreensForRole(effectiveRole),
+      },
     });
 
     await recordLog(req, {
@@ -113,6 +126,65 @@ authRoutes.post(
       action: AuditAction.LOGOUT,
       description: 'Logout realizado.',
     });
+    res.status(204).send();
+  }),
+);
+
+/**
+ * POST /api/auth/change-password
+ * Troca de senha pelo PROPRIO usuario (qualquer perfil).
+ *
+ * Antes desta rota, so um ADMIN conseguia trocar senhas - o que obrigava o
+ * usuario a entregar a senha a um terceiro e deixava o admin conhecendo a
+ * credencial de todo mundo.
+ *
+ * Exige a senha atual mesmo com a sessao ja autenticada: e o que impede que
+ * um token roubado seja convertido em posse permanente da conta.
+ */
+authRoutes.post(
+  '/change-password',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { current_password: currentPassword, new_password: newPassword } =
+      changePasswordSchema.parse(req.body);
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
+
+    const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!matches) {
+      await recordLog(req, {
+        action: AuditAction.LOGIN_FAILED,
+        entity: 'User',
+        entityId: user.id,
+        description: 'Troca de senha recusada: senha atual incorreta.',
+      });
+      throw new UnauthorizedError('Senha atual incorreta.');
+    }
+
+    // A senha nova nao pode conter o nome/e-mail do dono da conta.
+    const personal = checkPasswordPolicy(newPassword, user).filter((i) => i.code === 'personal');
+    if (personal.length > 0) {
+      throw new AppError(personal[0]!.message, 422);
+    }
+
+    if (await bcrypt.compare(newPassword, user.passwordHash)) {
+      throw new AppError('A nova senha deve ser diferente da senha atual.', 422);
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(newPassword, env.bcryptSaltRounds) },
+    });
+
+    await recordLog(req, {
+      action: AuditAction.PASSWORD_CHANGE,
+      entity: 'User',
+      entityId: user.id,
+      description: 'Senha alterada pelo proprio usuario.',
+    });
+
+    // O JWT continua valido ate expirar (ele nao guarda a senha). Trocar a
+    // senha nao encerra as demais sessoes - ver nota em docs/DOCUMENTATION.md.
     res.status(204).send();
   }),
 );

@@ -15,12 +15,44 @@
 import { ContractStatus, PrismaClient, Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { env } from '../src/config/env';
+import { checkPasswordPolicy } from '../src/utils/password';
 import { defaultScreensForRole } from '../src/utils/screens';
 
 const prisma = new PrismaClient();
 
+/**
+ * As senhas do seed sao intencionalmente simples (ambiente de demonstracao) e
+ * NAO passam pela politica de senha, que so incide sobre senhas definidas pela
+ * API. Como essas credenciais estao publicadas no repositorio, o seed avisa
+ * de forma visivel quando a senha do admin nao atende a politica - para que
+ * ninguem suba um ambiente real com "admin123".
+ */
+function warnAboutWeakSeedPassword(): void {
+  const issues = checkPasswordPolicy(env.seed.adminPassword, {
+    email: env.seed.adminEmail,
+    name: env.seed.adminName,
+  });
+  if (issues.length === 0) return;
+
+  console.warn('');
+  console.warn('  ****************************************************************');
+  console.warn('  *  ATENCAO: a senha do administrador do seed e fraca.          *');
+  console.warn('  *  Ela nao atende a politica de senha da aplicacao:            *');
+  for (const issue of issues) {
+    console.warn(`  *   - ${issue.message.padEnd(56)}*`);
+  }
+  console.warn('  *                                                              *');
+  console.warn('  *  Em qualquer ambiente que nao seja local, defina             *');
+  console.warn('  *  SEED_ADMIN_PASSWORD no .env ANTES de rodar o seed, ou       *');
+  console.warn('  *  troque a senha no primeiro acesso (menu > Alterar senha).   *');
+  console.warn('  ****************************************************************');
+  console.warn('');
+}
+
 async function main() {
   console.log('> Iniciando seed...');
+
+  warnAboutWeakSeedPassword();
 
   const saltRounds = env.bcryptSaltRounds;
 

@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 import { ROLE_LABEL, screenLabelFromPath } from '../lib/format';
+import { ChangePasswordModal } from './ChangePasswordModal';
 
 /**
  * Registra na auditoria cada tela acessada pelo usuario. Como o app e uma SPA,
@@ -58,6 +59,7 @@ export function Layout() {
   const { user, logout, hasScreen } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   usePageViewLogger();
 
@@ -149,6 +151,16 @@ export function Layout() {
             </div>
             <button
               type="button"
+              onClick={() => setPasswordOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span className="hidden sm:inline">Alterar senha</span>
+            </button>
+            <button
+              type="button"
               onClick={handleLogout}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
             >
@@ -164,6 +176,8 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+
+      <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
     </div>
   );
 }

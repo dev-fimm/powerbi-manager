@@ -72,10 +72,18 @@ export function serializeContract(contract: ContractWithExtras): ContractDTO {
     status: contract.status,
     created_at: contract.createdAt,
     updated_at: contract.updatedAt,
+    // Cada contador so aparece quando a rota realmente o selecionou. Isso
+    // permite que rotas de perfis nao-ADMIN omitam users_count (quantas contas
+    // acessam o contrato e informacao de gestao, nao de consumo) sem que o
+    // serializer devolva um "0" enganoso no lugar.
     ...(contract._count
       ? {
-          iframes_count: contract._count.iframes ?? 0,
-          users_count: contract._count.users ?? 0,
+          ...(contract._count.iframes !== undefined
+            ? { iframes_count: contract._count.iframes }
+            : {}),
+          ...(contract._count.users !== undefined
+            ? { users_count: contract._count.users }
+            : {}),
         }
       : {}),
     ...(contract.iframes ? { iframes: contract.iframes.map(serializeIframe) } : {}),

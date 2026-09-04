@@ -8,7 +8,8 @@ import { requireAdmin } from '../middlewares/rbac';
 import { hasIframeLevelAccess } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
-import { AppError, ConflictError, NotFoundError } from '../utils/errors';
+import { AppError, ConflictError, NotFoundError, UnauthorizedError } from '../utils/errors';
+import { checkPasswordPolicy } from '../utils/password';
 import {
   defaultScreensForRole,
   sanitizeManageableScreens,
@@ -119,6 +120,62 @@ userRoutes.put(
       }
     }
 
+    /**
+     * Rebaixar um ADMIN para GESTOR/VISUALIZADOR.
+     *
+     * A conta guarda em allowed_screens a lista completa do ADMIN. Ao perder o
+     * perfil, effectiveScreens passaria a filtrar essa lista pelas telas
+     * configuraveis e devolveria as QUATRO (dashboard, contracts, iframes,
+     * viewer) - contornando a regra de que conta nao-admin comeca apenas com
+     * Paineis. Redefine para o padrao do novo perfil; o resto se libera
+     * explicitamente na tela de Permissoes.
+     */
+    const demotedFromAdmin =
+      data.role !== undefined && current.role === Role.ADMIN && data.role !== Role.ADMIN;
+
+    if (data.password) {
+      // A senha nao pode conter o nome/e-mail da conta alvo (usa os valores
+      // que ficarao gravados, ja considerando o que veio no payload).
+      const personal = checkPasswordPolicy(data.password, {
+        name: data.name ?? current.name,
+        email: data.email ?? current.email,
+      }).filter((i) => i.code === 'personal');
+
+      if (personal.length > 0) throw new AppError(personal[0]!.message, 422);
+
+      /**
+       * Reautenticacao para redefinir a senha de uma conta ADMIN.
+       *
+       * Sem isto, qualquer administrador assumia a conta de outro apenas
+       * trocando a senha dele - escalada lateral silenciosa entre admins, e o
+       * bastante para fraudar a trilha de auditoria agindo como outra pessoa.
+       * Contas GESTOR/VISUALIZADOR seguem no fluxo normal de reset pelo admin.
+       */
+      if (current.role === Role.ADMIN) {
+        if (!data.current_password) {
+          throw new AppError(
+            'Para redefinir a senha de um administrador, confirme a sua propria senha.',
+            403,
+          );
+        }
+
+        const actor = await prisma.user.findUniqueOrThrow({
+          where: { id: req.user!.id },
+          select: { passwordHash: true },
+        });
+
+        if (!(await bcrypt.compare(data.current_password, actor.passwordHash))) {
+          await recordLog(req, {
+            action: AuditAction.LOGIN_FAILED,
+            entity: 'User',
+            entityId: id,
+            description: `Reautenticacao incorreta ao tentar redefinir a senha do administrador "${current.name}".`,
+          });
+          throw new UnauthorizedError('Sua senha de confirmacao esta incorreta.');
+        }
+      }
+    }
+
     const user = await prisma.user.update({
       where: { id },
       data: {
@@ -130,6 +187,7 @@ userRoutes.put(
         ...(data.password
           ? { passwordHash: await bcrypt.hash(data.password, env.bcryptSaltRounds) }
           : {}),
+        ...(demotedFromAdmin ? { allowedScreens: defaultScreensForRole(data.role!) } : {}),
       },
       include: { contracts: { include: { contract: true } } },
     });
@@ -140,6 +198,17 @@ userRoutes.put(
       entityId: user.id,
       description: `Usuario "${user.name}" (${user.email}) atualizado.`,
     });
+
+    // Reset de senha vira um evento proprio na auditoria: e o tipo de acao
+    // que precisa ser encontravel sem depender de ler descricoes.
+    if (data.password) {
+      await recordLog(req, {
+        action: AuditAction.PASSWORD_RESET,
+        entity: 'User',
+        entityId: user.id,
+        description: `Senha da conta "${user.name}" (${user.email}) redefinida por um administrador.`,
+      });
+    }
 
     res.json(serializeUser(user));
   }),

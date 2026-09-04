@@ -172,6 +172,17 @@ export function ViewerPage() {
                   frameBorder={0}
                   allowFullScreen
                   loading="lazy"
+                  /* O token de embed viaja na query string desta URL. Sem isto,
+                     ele seria enviado no cabecalho Referer para terceiros. */
+                  referrerPolicy="no-referrer"
+                  /* Confina o conteudo de terceiros: sem sandbox, o documento
+                     embutido pode navegar a janela principal (redirecionar o
+                     usuario para fora do sistema) e abrir modais nativos.
+                     allow-same-origin e necessario porque o Power BI usa
+                     storage/cookies proprios - e seguro aqui porque o documento
+                     final e app.powerbi.com, uma origem diferente da nossa, e
+                     portanto nao alcanca o DOM da aplicacao. */
+                  sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads"
                 />
               </article>
             ))}

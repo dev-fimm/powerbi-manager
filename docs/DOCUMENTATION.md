@@ -195,6 +195,22 @@ Controla **quais telas aparecem no menu** de cada conta e o acesso direto por UR
 - Gerenciada na tela **Permissões** (matriz Usuários × Telas).
 - É controle de **navegação** (frontend). A autorização de **dados** continua na Camada 2.
 
+**Padrão na criação** (`defaultScreensForRole`): ADMIN recebe todas as telas; **GESTOR e
+VISUALIZADOR recebem apenas `viewer`**. As demais são concedidas depois, explicitamente,
+na tela de Permissões. É privilégio mínimo — antes, toda conta nova já nascia com as
+quatro telas configuráveis, de modo que o acesso só era removido por exceção.
+
+Aplicado em `POST /users` e em `POST /auth/register` (esta última criava a conta sem
+nenhuma tela, deixando o usuário sem destino após o login).
+
+**Rebaixamento de ADMIN** (`PUT /users/:id` mudando `role` de ADMIN para outro perfil):
+`allowed_screens` é redefinido para o padrão do novo perfil. Sem isso a conta manteria a
+lista completa de ADMIN gravada, e `effectiveScreens` a filtraria para as quatro telas
+configuráveis — contornando o padrão restrito. Trocas entre GESTOR e VISUALIZADOR
+preservam o que já havia sido concedido.
+
+Contas já existentes não são alteradas: a regra incide na criação (e no rebaixamento).
+
 Catálogo espelhado em `backend/src/utils/screens.ts` e `frontend/src/lib/screens.ts`.
 
 ### Camada 4 — Acesso por dashboard (`user_iframes`) — **só VISUALIZADOR**
@@ -210,6 +226,12 @@ Distribui, por conta, **quais painéis** um VISUALIZADOR vê na tela **Paineis**
 ### Salvaguardas adicionais
 - O ADMIN logado não pode se auto-excluir, se desativar nem rebaixar o próprio perfil.
 - A mensagem de erro de login é a mesma para e-mail inexistente e senha errada (não revela quais e-mails existem).
+- **Política de senha** (`backend/src/utils/password.ts`): mínimo de 10 e máximo de 72 caracteres (o bcrypt trunca acima de 72 bytes), ao menos 3 dos 4 tipos de caractere, bloqueio de senhas comuns e proibição de conter o nome ou o e-mail do próprio usuário. Vale para cadastro, redefinição pelo ADMIN e troca pelo usuário. Senhas já existentes seguem válidas — não há rotação forçada.
+- **Gerador de senha** (`frontend/src/lib/password.ts`, `generatePassword`): disponível na tela de Usuários como alternativa à digitação — as duas formas escrevem no mesmo campo, que segue editável. Gera 16 caracteres com `crypto.getRandomValues` e amostragem por rejeição (`Math.random()` não é criptograficamente seguro, e `% max` sobre 2³² enviesaria os primeiros valores). Garante um caractere de cada um dos 4 tipos, embaralha com Fisher-Yates e revalida contra a política antes de devolver. O alfabeto exclui `0 O 1 l I` para evitar erro de transcrição. Não foi exposto em "Alterar senha" (troca pelo próprio usuário): ali uma senha gerada e não guardada tranca o dono fora da conta, sem admin no caminho.
+- **Troca de senha pelo próprio usuário** (`POST /auth/change-password`): exige a senha atual mesmo com a sessão autenticada, para que um token roubado não vire posse permanente da conta. Antes disso, só um ADMIN trocava senhas — o que obrigava o usuário a entregar a credencial a outra pessoa.
+- **Reautenticação para redefinir senha de ADMIN** (`PUT /users/:id` com `current_password`): sem isso, um administrador assumia a conta de outro em silêncio e passava a agir na auditoria com o nome dele — escalada lateral entre admins.
+
+> **Ainda em aberto:** não há limite de tentativas no login nem em `/auth/change-password`. A política de senha encarece a força bruta, mas não a impede; o bloqueio por tentativas continua pendente.
 
 ---
 
@@ -232,8 +254,16 @@ Network do DevTools). Não é possível ocultá-la 100% com proxy, porque o
 "Publicar na web" é um app cliente que lê o token da própria URL para renderizar.
 Para ocultação completa **e** renderização, use **Power BI Embedded** ([seção 11](#11-evolução-recomendada-power-bi-embedded)).
 
+**Confinamento do iframe (frontend).** Os `<iframe>` que renderizam painéis usam:
+
+- `sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads"` — sem sandbox, o conteúdo de terceiros pode navegar a janela principal (redirecionar o usuário para fora do sistema) e abrir diálogos nativos. `allow-same-origin` é necessário porque o Power BI usa storage e cookies próprios, e é seguro aqui porque o documento final é `app.powerbi.com`, uma origem **diferente** da aplicação — portanto não alcança o DOM do sistema.
+- `referrerPolicy="no-referrer"` — o `embed_token` viaja na **query string**; sem isso a URL que o contém seria enviada a terceiros no cabeçalho `Referer`.
+
+> Se algum relatório deixar de renderizar, o `sandbox` é o primeiro suspeito: verifique no console qual permissão foi bloqueada antes de removê-lo por inteiro.
+
 Artefatos: `backend/src/utils/embed.ts` (assina/valida token), `viewer.routes.ts`
-(rota de embed e emissão do token).
+(rota de embed e emissão do token), `frontend/src/pages/ViewerPage.tsx` e
+`IframesPage.tsx` (atributos de confinamento).
 
 ---
 
@@ -247,14 +277,32 @@ O registro nunca quebra a requisição principal (erros são apenas logados).
 | Categoria | Ações |
 |---|---|
 | Autenticação | `LOGIN`, `LOGIN_FAILED`, `LOGOUT` |
+| Senhas | `PASSWORD_CHANGE` (pelo próprio usuário), `PASSWORD_RESET` (por um ADMIN) |
 | Navegação | `PAGE_VIEW` (tela acessada) |
 | Usuários | `USER_CREATE`, `USER_UPDATE`, `USER_DELETE`, `USER_CONTRACTS`, `USER_SCREENS`, `USER_IFRAMES` |
 | Contratos | `CONTRACT_CREATE`, `CONTRACT_UPDATE`, `CONTRACT_DELETE` |
 | Iframes | `IFRAME_CREATE`, `IFRAME_UPDATE`, `IFRAME_DELETE` |
+| Manutenção | `AUDIT_PURGE` (expurgo automático por retenção) |
 
 **Consulta:** tela **Logs** (só ADMIN), com filtros por ação, usuário, texto livre e
 intervalo de datas, além de paginação. Cada `PAGE_VIEW` é gravado pelo frontend a
 cada troca de rota (com de-duplicação).
+
+### Retenção (`backend/src/utils/auditRetention.ts`)
+
+Cada linha guarda `ip_address` e `user_agent` — dado pessoal. Mantê-los indefinidamente
+amplia o estrago de um vazamento do banco sem benefício operacional e contraria o
+princípio da LGPD de não reter além da finalidade. Há também um motivo prático: o
+`PAGE_VIEW` registra cada navegação de cada usuário, então a tabela cresce sem limite.
+
+`purgeExpiredAuditLogs()` apaga o que for mais antigo que `AUDIT_LOG_RETENTION_DAYS`
+(padrão 365; `0` desliga). É agendado em `server.ts`: roda no boot e a cada 24 h, com
+`timer.unref()` para não segurar o encerramento do processo. O `deleteMany` usa o índice
+`audit_logs(created_at)`, então não varre a tabela inteira.
+
+O expurgo é idempotente — se duas instâncias da API rodarem juntas, a segunda
+simplesmente não encontra nada. E ele registra a si mesmo como `AUDIT_PURGE`: sem isso,
+um buraco no histórico seria indistinguível de adulteração.
 
 ---
 
@@ -270,6 +318,7 @@ indicado como **público**. Erros seguem o formato:
 | POST | `/auth/login` | **público** |
 | POST | `/auth/logout` | autenticado (registra auditoria) |
 | POST | `/auth/register` | ADMIN |
+| POST | `/auth/change-password` | autenticado — body `{ "current_password", "new_password" }`; 204 em caso de sucesso |
 | GET | `/auth/me` | autenticado |
 
 ### Usuários (ADMIN)
@@ -278,7 +327,7 @@ indicado como **público**. Erros seguem o formato:
 | GET | `/users` | lista |
 | GET | `/users/:id` | detalhe |
 | POST | `/users` | cria (telas padrão pelo perfil) |
-| PUT | `/users/:id` | atualiza |
+| PUT | `/users/:id` | atualiza. Redefinir a senha de uma conta **ADMIN** exige `current_password` (senha de quem executa) — 403 sem ela, 401 se estiver errada |
 | DELETE | `/users/:id` | exclui (preserva contratos) |
 | PUT | `/users/:id/contracts` | body `{ "contract_ids": [] }` |
 | PUT | `/users/:id/screens` | body `{ "screens": [] }` — só telas configuráveis; rejeita ADMIN |
@@ -294,6 +343,20 @@ indicado como **público**. Erros seguem o formato:
 | PUT | `/contracts/:id` | ADMIN, GESTOR (só associados) |
 | DELETE | `/contracts/:id` | ADMIN |
 | GET | `/contracts/:id/iframes` | autenticado com acesso |
+
+**Contadores por perfil.** Os campos `iframes_count` e `users_count` do DTO de contrato
+são montados conforme quem pergunta, para que o número exibido não revele mais do que a
+conta enxerga:
+
+| Perfil | `iframes_count` | `users_count` |
+|---|---|---|
+| ADMIN | todos os painéis | presente |
+| GESTOR | todos os painéis | **omitido** — quantas contas usam o contrato é informação de gestão de acesso |
+| VISUALIZADOR | só os painéis **ativos e concedidos** a ele (Camada 4) | **omitido** |
+
+Antes disso, um VISUALIZADOR via "8 painéis" num contrato em que só tinha acesso a 2.
+Os campos são **omitidos**, não zerados: `serializeContract` só inclui cada contador
+quando a rota realmente o selecionou, para não devolver um `0` enganoso.
 
 ### Iframes
 | Método | Rota | Acesso |
@@ -365,8 +428,10 @@ Histórico em `backend/prisma/migrations/`:
 - Desenvolvimento: `npx prisma migrate dev`
 - Produção: `npx prisma migrate deploy`
 
-> Após adicionar `allowed_screens`, os usuários não-admin existentes recebem por
-> padrão as telas configuráveis (`dashboard`, `contracts`, `iframes`, `viewer`);
+> Quando `allowed_screens` foi adicionada, os usuários não-admin **existentes** ficaram
+> com as quatro telas configuráveis (`dashboard`, `contracts`, `iframes`, `viewer`), e
+> continuam assim — a migração não é reaplicada. Contas criadas a partir de agora
+> recebem apenas `viewer` (ver [Camada 3](#camada-3--permissões-de-tela-por-conta-allowed_screens--menu-frontend)).
 > ADMIN é sempre tratado como "todas as telas".
 
 ---

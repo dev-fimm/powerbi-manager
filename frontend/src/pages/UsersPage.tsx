@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Button } from '../components/ui/Button';
 import { ActiveBadge, PageHeader, RoleBadge } from '../components/ui/Card';
 import { Checkbox, Input, Select } from '../components/ui/Field';
 import { ConfirmDialog, Modal } from '../components/ui/Modal';
+import { PasswordRequirements, PasswordStrengthBar } from '../components/ui/PasswordRequirements';
 import { Table, type Column } from '../components/ui/Table';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { ApiError, api } from '../lib/api';
 import { formatDate } from '../lib/format';
+import { checkPassword, generatePassword } from '../lib/password';
 import type { Contract, Role, User } from '../types';
 
 interface FormState {
@@ -16,6 +18,8 @@ interface FormState {
   password: string;
   role: Role;
   isActive: boolean;
+  /** Senha do ADMIN logado, exigida para redefinir a senha de outro ADMIN. */
+  currentPassword: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -24,6 +28,7 @@ const EMPTY_FORM: FormState = {
   password: '',
   role: 'VISUALIZADOR',
   isActive: true,
+  currentPassword: '',
 };
 
 export function UsersPage() {
@@ -38,6 +43,9 @@ export function UsersPage() {
   const [editing, setEditing] = useState<User | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // Senha gerada precisa ser lida pelo admin para ser repassada, entao o campo
+  // alterna entre oculto e visivel. Comeca oculto em toda abertura do modal.
+  const [showPassword, setShowPassword] = useState(false);
 
   // Modal de associacao de contratos
   const [linking, setLinking] = useState<User | null>(null);
@@ -68,9 +76,50 @@ export function UsersPage() {
     load();
   }, [load]);
 
+  // Avalia a senha digitada contra a politica, ja considerando nome/e-mail
+  // que estao sendo gravados nesta mesma tela.
+  const passwordCheck = useMemo(
+    () => checkPassword(form.password, { name: form.name, email: form.email }),
+    [form.password, form.name, form.email],
+  );
+
+  /**
+   * Redefinir a senha de uma conta ADMIN exige que o administrador confirme a
+   * PROPRIA senha. Sem isso, um admin assumia a conta de outro em silencio -
+   * e passava a agir na auditoria com o nome dele.
+   */
+  const needsReauth = Boolean(editing && editing.role === 'ADMIN' && form.password);
+
+  /**
+   * Preenche o campo com uma senha forte gerada na hora. Nao substitui a
+   * digitacao manual: e so mais um caminho para chegar ao mesmo campo, que
+   * segue editavel depois de gerado.
+   */
+  function handleGeneratePassword() {
+    try {
+      const generated = generatePassword({ name: form.name, email: form.email });
+      setForm((prev) => ({ ...prev, password: generated }));
+      // Sem revelar, o admin nao teria como repassar a senha ao usuario.
+      setShowPassword(true);
+    } catch {
+      toast.error('Nao foi possivel gerar a senha. Tente novamente.');
+    }
+  }
+
+  async function handleCopyPassword() {
+    try {
+      await navigator.clipboard.writeText(form.password);
+      toast.success('Senha copiada.');
+    } catch {
+      // clipboard exige contexto seguro (https ou localhost) e permissao.
+      toast.warning('Nao foi possivel copiar. Selecione a senha e copie manualmente.');
+    }
+  }
+
   function openCreate() {
     setEditing(null);
     setForm(EMPTY_FORM);
+    setShowPassword(false);
     setModalOpen(true);
   }
 
@@ -82,12 +131,24 @@ export function UsersPage() {
       password: '', // vazio = mantem a senha atual
       role: user.role,
       isActive: user.is_active,
+      currentPassword: '',
     });
+    setShowPassword(false);
     setModalOpen(true);
   }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+
+    if (form.password && !passwordCheck.valid) {
+      toast.error('A nova senha nao atende a politica de seguranca.');
+      return;
+    }
+    if (needsReauth && !form.currentPassword) {
+      toast.error('Confirme a sua propria senha para redefinir a de um administrador.');
+      return;
+    }
+
     setSaving(true);
     try {
       if (editing) {
@@ -98,6 +159,8 @@ export function UsersPage() {
           isActive: form.isActive,
           // So envia a senha se o admin digitou uma nova.
           ...(form.password ? { password: form.password } : {}),
+          // Reautenticacao: exigida pelo backend ao redefinir senha de ADMIN.
+          ...(needsReauth ? { current_password: form.currentPassword } : {}),
         });
         toast.success('Usuario atualizado.');
       } else {
@@ -260,15 +323,85 @@ export function UsersPage() {
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
           />
-          <Input
-            label={editing ? 'Nova senha' : 'Senha'}
-            type="password"
-            required={!editing}
-            minLength={6}
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            hint={editing ? 'Deixe em branco para manter a senha atual.' : 'Minimo de 6 caracteres.'}
-          />
+          <div className="sm:col-span-2">
+            {/* Duas formas de definir a senha: digitar ou gerar. O campo é o
+                mesmo nos dois casos e continua editável depois de gerado. */}
+            <Input
+              label={editing ? 'Nova senha' : 'Senha'}
+              type={showPassword ? 'text' : 'password'}
+              autoComplete="new-password"
+              required={!editing}
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className={showPassword ? 'font-mono' : ''}
+              hint={
+                editing
+                  ? 'Deixe em branco para manter a senha atual.'
+                  : 'Digite uma senha ou use "Gerar senha".'
+              }
+            />
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={handleGeneratePassword}
+                icon={
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                  </svg>
+                }
+              >
+                Gerar senha
+              </Button>
+
+              {form.password.length > 0 && (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? 'Ocultar' : 'Mostrar'}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={handleCopyPassword}>
+                    Copiar
+                  </Button>
+                </>
+              )}
+            </div>
+
+            {form.password.length > 0 && (
+              <>
+                <PasswordStrengthBar check={passwordCheck} />
+                <PasswordRequirements check={passwordCheck} />
+              </>
+            )}
+
+            {showPassword && form.password.length > 0 && (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-800">
+                Copie a senha agora e entregue ao usuário por um canal seguro. Ela não fica
+                guardada em texto legível — depois de salvar, não há como consultá-la.
+              </p>
+            )}
+          </div>
+
+          {/* Reautenticacao ao redefinir a senha de outro administrador. */}
+          {needsReauth && (
+            <div className="sm:col-span-2">
+              <Input
+                label="Confirme a SUA senha"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={form.currentPassword}
+                onChange={(e) => setForm({ ...form, currentPassword: e.target.value })}
+                hint="Redefinir a senha de um administrador exige confirmar a sua propria identidade."
+              />
+            </div>
+          )}
           <Select
             label="Perfil de acesso"
             value={form.role}
@@ -276,7 +409,7 @@ export function UsersPage() {
             disabled={editing?.id === currentUser?.id}
             hint={
               form.role === 'ADMIN'
-                ? 'Acesso total a todos os contratos e usuarios.'
+                ? 'Acesso total a todos os contratos, usuarios e telas.'
                 : form.role === 'GESTOR'
                   ? 'Gerencia contratos e iframes dos contratos associados.'
                   : 'Apenas visualiza os paineis dos contratos associados.'
@@ -294,6 +427,16 @@ export function UsersPage() {
               onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
             />
           </div>
+
+          {/* Contas nao-ADMIN nascem so com a tela de Paineis. Sem este aviso,
+              o admin cria o usuario e estranha o menu curto no primeiro login. */}
+          {!editing && form.role !== 'ADMIN' && (
+            <p className="rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600 sm:col-span-2">
+              Esta conta sera criada com acesso apenas a tela <strong>Paineis</strong>. As demais
+              telas (Dashboard, Contratos e Iframes) sao liberadas depois, em{' '}
+              <strong>Permissoes</strong>.
+            </p>
+          )}
         </form>
       </Modal>
 

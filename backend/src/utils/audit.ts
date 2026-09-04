@@ -19,6 +19,12 @@ export const AuditAction = {
   LOGIN_FAILED: 'LOGIN_FAILED',
   LOGOUT: 'LOGOUT',
   PAGE_VIEW: 'PAGE_VIEW',
+  /** O proprio usuario trocou a senha informando a senha atual. */
+  PASSWORD_CHANGE: 'PASSWORD_CHANGE',
+  /** Um ADMIN redefiniu a senha de outra conta. */
+  PASSWORD_RESET: 'PASSWORD_RESET',
+  /** Expurgo automatico de logs vencidos (politica de retencao). */
+  AUDIT_PURGE: 'AUDIT_PURGE',
   USER_CREATE: 'USER_CREATE',
   USER_UPDATE: 'USER_UPDATE',
   USER_DELETE: 'USER_DELETE',

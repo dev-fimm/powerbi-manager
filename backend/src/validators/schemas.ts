@@ -1,10 +1,41 @@
 import { ContractStatus, Role } from '@prisma/client';
 import { z } from 'zod';
+import { checkPasswordPolicy } from '../utils/password';
 import { POWER_BI_URL_ERROR, isValidPowerBiUrl } from '../utils/powerbi';
 
 export const uuidParam = z.object({
   id: z.string().uuid('Identificador invalido.'),
 });
+
+/**
+ * Campo de senha sujeito a politica (utils/password.ts). Cada regra violada
+ * vira um issue separado, entao o 422 devolvido ao front lista exatamente o
+ * que falta na senha em vez de um "senha invalida" generico.
+ */
+const strongPasswordField = z.string().superRefine((value, ctx) => {
+  for (const issue of checkPasswordPolicy(value)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message });
+  }
+});
+
+/**
+ * Reaplica a politica considerando nome e e-mail do proprio usuario, de modo
+ * que "joao.silva" nao possa virar a senha de joao.silva@empresa.com.
+ * Usado nos schemas que ja trazem esses campos no mesmo payload.
+ */
+function refinePasswordAgainstIdentity<
+  T extends { password?: string; name?: string; email?: string },
+>(data: T, ctx: z.RefinementCtx): void {
+  if (!data.password) return;
+  const contextual = checkPasswordPolicy(data.password, {
+    name: data.name,
+    email: data.email,
+  }).filter((i) => i.code === 'personal');
+
+  for (const issue of contextual) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: ['password'] });
+  }
+}
 
 /** Campo reutilizavel com a validacao da URL publica do Power BI (regra 4). */
 const powerBiUrlField = z
@@ -31,31 +62,50 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'A senha e obrigatoria.'),
 });
 
-export const registerSchema = z.object({
-  name: z.string().trim().min(2, 'Nome muito curto.'),
-  email: z.string().trim().toLowerCase().email('E-mail invalido.'),
-  password: z.string().min(6, 'A senha deve ter ao menos 6 caracteres.'),
-  role: z.nativeEnum(Role).optional(),
+export const registerSchema = z
+  .object({
+    name: z.string().trim().min(2, 'Nome muito curto.'),
+    email: z.string().trim().toLowerCase().email('E-mail invalido.'),
+    password: strongPasswordField,
+    role: z.nativeEnum(Role).optional(),
+  })
+  .superRefine(refinePasswordAgainstIdentity);
+
+/**
+ * Troca de senha pelo proprio usuario (POST /api/auth/change-password).
+ * Exige a senha atual: sem isso, uma sessao sequestrada trocaria a senha e
+ * expulsaria o dono da conta.
+ */
+export const changePasswordSchema = z.object({
+  current_password: z.string().min(1, 'Informe a sua senha atual.'),
+  new_password: strongPasswordField,
 });
 
 // ---------------------------------------------------------------- users
-export const createUserSchema = z.object({
-  name: z.string().trim().min(2, 'Nome muito curto.'),
-  email: z.string().trim().toLowerCase().email('E-mail invalido.'),
-  password: z.string().min(6, 'A senha deve ter ao menos 6 caracteres.'),
-  role: z.nativeEnum(Role).default(Role.VISUALIZADOR),
-  isActive: z.boolean().default(true),
-  contractIds: z.array(z.string().uuid()).optional(),
-});
+export const createUserSchema = z
+  .object({
+    name: z.string().trim().min(2, 'Nome muito curto.'),
+    email: z.string().trim().toLowerCase().email('E-mail invalido.'),
+    password: strongPasswordField,
+    role: z.nativeEnum(Role).default(Role.VISUALIZADOR),
+    isActive: z.boolean().default(true),
+    contractIds: z.array(z.string().uuid()).optional(),
+  })
+  .superRefine(refinePasswordAgainstIdentity);
 
-export const updateUserSchema = z.object({
-  name: z.string().trim().min(2).optional(),
-  email: z.string().trim().toLowerCase().email('E-mail invalido.').optional(),
-  // Senha opcional: so e re-hasheada quando enviada e nao vazia.
-  password: z.string().min(6, 'A senha deve ter ao menos 6 caracteres.').optional(),
-  role: z.nativeEnum(Role).optional(),
-  isActive: z.boolean().optional(),
-});
+export const updateUserSchema = z
+  .object({
+    name: z.string().trim().min(2).optional(),
+    email: z.string().trim().toLowerCase().email('E-mail invalido.').optional(),
+    // Senha opcional: so e re-hasheada quando enviada e nao vazia.
+    password: strongPasswordField.optional(),
+    role: z.nativeEnum(Role).optional(),
+    isActive: z.boolean().optional(),
+    // Senha de quem esta executando a acao. Exigida apenas para redefinir a
+    // senha de uma conta ADMIN (reautenticacao - ver users.routes.ts).
+    current_password: z.string().min(1).optional(),
+  })
+  .superRefine(refinePasswordAgainstIdentity);
 
 export const setUserContractsSchema = z.object({
   contract_ids: z.array(z.string().uuid('Identificador de contrato invalido.')),

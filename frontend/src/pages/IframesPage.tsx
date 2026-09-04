@@ -378,6 +378,10 @@ export function IframesPage() {
             className="h-[600px] w-full rounded-lg border border-slate-200"
             frameBorder={0}
             allowFullScreen
+            /* Nao vaza a URL desta tela para o Power BI. */
+            referrerPolicy="no-referrer"
+            /* Mesmo confinamento do viewer - ver comentario em ViewerPage.tsx. */
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads"
           />
         )}
       </Modal>

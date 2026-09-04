@@ -7,6 +7,7 @@ import {
   getAccessibleContractIds,
   getGrantedIframeIds,
   hasIframeLevelAccess,
+  isAdmin,
 } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { verifyEmbedToken, signEmbedToken } from '../utils/embed';
@@ -76,11 +77,12 @@ viewerRoutes.get(
         },
         orderBy: { name: 'asc' },
         include: {
-          // So conta os paineis ativos concedidos a este usuario.
+          // So conta os paineis ativos concedidos a este usuario. users_count
+          // fica de fora: quantas contas acessam o contrato e informacao de
+          // gestao, que este perfil nao precisa (e nao deve) conhecer.
           _count: {
             select: {
               iframes: { where: { isActive: true, id: { in: grantedIds } } },
-              users: true,
             },
           },
         },
@@ -103,7 +105,13 @@ viewerRoutes.get(
       orderBy: { name: 'asc' },
       include: {
         // Conta apenas os iframes ativos, que sao os que o viewer exibe (regra 5).
-        _count: { select: { iframes: { where: { isActive: true } }, users: true } },
+        // users_count so para ADMIN (ver comentario no ramo do VISUALIZADOR).
+        _count: {
+          select: {
+            iframes: { where: { isActive: true } },
+            ...(isAdmin(req.user!) ? { users: true as const } : {}),
+          },
+        },
       },
     });
 

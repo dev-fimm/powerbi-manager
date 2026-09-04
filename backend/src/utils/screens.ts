@@ -19,6 +19,9 @@ export const MANAGEABLE_SCREENS = ['dashboard', 'contracts', 'iframes', 'viewer'
 /** Telas exclusivas de ADMIN: sempre visiveis para ADMIN, nunca para os demais. */
 export const ADMIN_SCREENS = ['users', 'permissions', 'logs'] as const;
 
+/** Tela de Paineis: unica liberada por padrao em contas GESTOR/VISUALIZADOR. */
+export const VIEWER_SCREEN = 'viewer';
+
 export const ALL_SCREENS: string[] = [...MANAGEABLE_SCREENS, ...ADMIN_SCREENS];
 
 const MANAGEABLE_SET = new Set<string>(MANAGEABLE_SCREENS);
@@ -30,12 +33,23 @@ export function effectiveScreens(user: { role: Role; allowedScreens: string[] })
   return user.allowedScreens.filter((s) => MANAGEABLE_SET.has(s));
 }
 
-/** Telas padrao ao criar uma conta, conforme o perfil. */
+/**
+ * Telas padrao ao criar uma conta, conforme o perfil.
+ *
+ * GESTOR e VISUALIZADOR nascem com acesso APENAS a tela de Paineis ("viewer").
+ * Dashboard, Contratos e Iframes sao liberados depois, conta a conta, na tela
+ * de Permissoes.
+ *
+ * A logica e de privilegio minimo: a conta comeca com o que precisa para
+ * cumprir a finalidade dela (ver os paineis) e cresce por decisao explicita de
+ * um ADMIN. Antes, toda conta nova ja vinha com as quatro telas configuraveis,
+ * o que significava que ninguem nunca REMOVIA acesso - so esquecia de remover.
+ *
+ * Contas ja existentes nao sao afetadas: isto vale no momento da criacao.
+ */
 export function defaultScreensForRole(role: Role): string[] {
   if (role === Role.ADMIN) return [...ALL_SCREENS];
-  // GESTOR e VISUALIZADOR recebem por padrao todas as telas configuraveis
-  // (mesmo menu que tinham antes deste controle existir).
-  return [...MANAGEABLE_SCREENS];
+  return [VIEWER_SCREEN];
 }
 
 /** Filtra uma lista arbitraria mantendo apenas telas configuraveis validas. */

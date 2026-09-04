@@ -18,6 +18,7 @@ Sistema web para gerenciar **usuários**, **contratos** e os **iframes públicos
 - [Pré-requisitos](#pré-requisitos)
 - [Instalação e execução](#instalação-e-execução)
 - [Credenciais do seed](#credenciais-do-seed)
+- [Política de senha](#política-de-senha)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Regras de negócio](#regras-de-negócio)
 - [Perfis de acesso](#perfis-de-acesso)
@@ -165,13 +166,53 @@ O frontend sobe em **http://localhost:5173**.
 | GESTOR | `gestor@sistema.com` | `gestor123` | Os 2 contratos de exemplo |
 | VISUALIZADOR | `viewer@sistema.com` | `viewer123` | Apenas o contrato de Saneamento |
 
-> **Troque essas senhas antes de colocar em produção.**
+> **Troque essas senhas antes de colocar em produção.** Elas são públicas neste repositório e
+> **não** atendem à [política de senha](#política-de-senha) — o próprio `npm run seed` avisa isso
+> no terminal. Cada usuário troca a própria senha em **Alterar senha**, no topo da tela.
 
 > ℹ️ O acesso do **VISUALIZADOR** aos painéis é **por dashboard** (modelo explícito): por padrão
 > ele não vê nenhum painel. Libere os painéis desejados na tela **Permissões → Acesso aos Paineis**.
 > Ver [Controle de acesso avançado](#controle-de-acesso-avançado).
 
 O seed também cria 2 contratos e 3 iframes de exemplo. As URLs do Power BI usadas são **placeholders no formato correto** (`https://app.powerbi.com/view?r=...`) — substitua pelos links reais dos seus relatórios para que os painéis carreguem.
+
+---
+
+## Política de senha
+
+Vale para toda senha definida pela aplicação (cadastro de usuário, redefinição pelo ADMIN e troca pelo próprio usuário). Senhas já existentes no banco continuam válidas para login — **não há rotação forçada**.
+
+| Regra | Motivo |
+|---|---|
+| Mínimo de **10 caracteres** | Comprimento é o fator que mais encarece um ataque de força bruta |
+| Máximo de **72 caracteres** | O bcrypt ignora o que passa de 72 bytes; sem esse teto a senha seria truncada em silêncio |
+| Ao menos **3 dos 4 tipos**: minúscula, maiúscula, número, símbolo | Exigir os 4 empurra todo mundo para o previsível `Senha123!` |
+| Não estar na lista de **senhas comuns** | Inclui `admin123`, `senha123` e as demais credenciais do seed |
+| Sem **4 caracteres iguais seguidos** | Barra o preenchimento preguiçoso (`aaaa`) |
+| Não conter o **nome** nem o **e-mail** do usuário | É o primeiro palpite de quem conhece a vítima |
+
+A tela mostra cada regra e marca as que já foram atendidas enquanto o usuário digita — em vez de recusar o formulário revelando uma exigência por vez.
+
+### Definindo a senha: digitar ou gerar
+
+Na tela de **Usuários** há as duas opções, sobre o mesmo campo:
+
+- **Digitar** — comportamento normal, com a validação em tempo real.
+- **Gerar senha** — preenche o campo com uma senha aleatória de 16 caracteres que já atende à política. O campo continua editável depois de gerado.
+
+Junto do botão ficam **Mostrar/Ocultar** e **Copiar**: uma senha gerada precisa ser lida para ser repassada ao usuário, e depois de salva não há como consultá-la (fica só o hash).
+
+A geração usa `crypto.getRandomValues` (CSPRNG do navegador), **não** `Math.random()`, com amostragem por rejeição para não enviesar a escolha dos caracteres. O alfabeto omite `0`, `O`, `1`, `l` e `I` de propósito: a senha quase sempre é ditada ou transcrita, e confundir `l` com `1` vira chamado de suporte.
+
+> O gerador **não** foi adicionado à tela "Alterar senha" do próprio usuário. Lá o risco se inverte: quem gera uma senha para si e não a guarda perde o acesso à própria conta, sem um admin no meio do caminho para corrigir.
+
+**Trocar a própria senha:** botão **Alterar senha** no topo, disponível para qualquer perfil. Exige a senha atual, mesmo com a sessão já autenticada — é o que impede que um token roubado vire posse permanente da conta.
+
+**Redefinir a senha de um ADMIN:** exige que o administrador confirme a própria senha. Sem isso, um admin assumiria a conta de outro em silêncio e passaria a agir na auditoria com o nome dele. Contas GESTOR e VISUALIZADOR seguem no fluxo normal de reset.
+
+> Ainda **não** existe "esqueci minha senha" por e-mail: isso depende de infraestrutura de envio (SMTP) que o projeto não tem. Hoje a recuperação é feita por um ADMIN, pela tela de Usuários.
+
+Definida em [`backend/src/utils/password.ts`](backend/src/utils/password.ts) e espelhada em [`frontend/src/lib/password.ts`](frontend/src/lib/password.ts) — **as duas precisam ser alteradas juntas**, sendo o backend a fonte da verdade.
 
 ---
 
@@ -188,6 +229,7 @@ O seed também cria 2 contratos e 3 iframes de exemplo. As URLs do Power BI usad
 | `PORT` | não | Porta da API (padrão `3333`) |
 | `NODE_ENV` | não | `development` ou `production` |
 | `CORS_ORIGIN` | não | Origens permitidas, separadas por vírgula, ou `*` |
+| `AUDIT_LOG_RETENTION_DAYS` | não | Dias de retenção dos logs de auditoria (padrão `365`; `0` desliga o expurgo) |
 | `SEED_ADMIN_*` | não | Nome, e-mail e senha do admin criado pelo seed |
 
 ### frontend/.env
@@ -241,6 +283,12 @@ Define **quais telas** aparecem no menu de cada conta e o acesso direto por URL.
 - Telas **exclusivas de ADMIN** (nunca liberadas a outros perfis): `Usuários`, `Permissões`, `Logs`.
 - É controle de **navegação** (frontend). A autorização de **dados** continua sendo por perfil no backend.
 
+**Telas iniciais de uma conta nova:** GESTOR e VISUALIZADOR são criados com acesso **apenas a `Paineis`**. `Dashboard`, `Contratos` e `Iframes` são liberados depois, conta a conta, aqui em Permissões.
+
+É privilégio mínimo: a conta nasce com o necessário para a finalidade dela e cresce por decisão explícita. Antes, toda conta nova já vinha com as quatro telas — na prática ninguém *removia* acesso, apenas esquecia de remover.
+
+> Contas **já existentes não são afetadas** — a regra vale no momento da criação. A exceção é o rebaixamento de um ADMIN para GESTOR/VISUALIZADOR: aí as telas voltam ao padrão do novo perfil, senão a conta manteria a lista completa que tinha como administrador.
+
 ### Acesso por dashboard (só VISUALIZADOR)
 Distribui, por conta, **quais painéis** um VISUALIZADOR vê na tela **Paineis** (Permissões → "Acesso aos Paineis").
 
@@ -267,7 +315,15 @@ Para que o link público do Power BI (`?r=...`) não fique exposto na interface:
 
 Todas as ações relevantes são registradas na tabela `audit_logs` e consultadas na tela **Logs** (só ADMIN), com filtros (ação, usuário, texto, datas) e paginação.
 
-Ações registradas: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PAGE_VIEW` (tela acessada), e as operações de `USER_*`, `CONTRACT_*` e `IFRAME_*` (criar/editar/excluir), além de `USER_CONTRACTS`, `USER_SCREENS` e `USER_IFRAMES`.
+Ações registradas: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PAGE_VIEW` (tela acessada), `PASSWORD_CHANGE` (troca pelo próprio usuário), `PASSWORD_RESET` (redefinição por um ADMIN), `AUDIT_PURGE` (expurgo automático), e as operações de `USER_*`, `CONTRACT_*` e `IFRAME_*` (criar/editar/excluir), além de `USER_CONTRACTS`, `USER_SCREENS` e `USER_IFRAMES`.
+
+### Retenção
+
+Os logs guardam **IP e user-agent** — dado pessoal. Guardá-los indefinidamente amplia o estrago de um vazamento do banco sem benefício operacional e contraria o princípio da LGPD de não reter além da finalidade. Também há um motivo prático: o `PAGE_VIEW` registra **cada navegação de cada usuário**, então a tabela cresce sem limite.
+
+Um job apaga os registros mais antigos que `AUDIT_LOG_RETENTION_DAYS` (padrão **365 dias**). Ele roda na inicialização da API e depois a cada 24 h. Use `AUDIT_LOG_RETENTION_DAYS=0` para desligar, por exemplo quando houver exigência contratual de guarda.
+
+O próprio expurgo fica registrado como `AUDIT_PURGE` — sem isso, um buraco no histórico seria indistinguível de adulteração.
 
 ---
 
@@ -281,6 +337,7 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | POST | `/api/auth/login` | público |
 | POST | `/api/auth/logout` | autenticado (registra auditoria) |
 | POST | `/api/auth/register` | ADMIN |
+| POST | `/api/auth/change-password` | autenticado — body `{ "current_password": "", "new_password": "" }` |
 | GET | `/api/auth/me` | autenticado |
 
 ### Usuários (ADMIN)
@@ -289,7 +346,7 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | GET | `/api/users` |
 | GET | `/api/users/:id` |
 | POST | `/api/users` |
-| PUT | `/api/users/:id` |
+| PUT | `/api/users/:id` — redefinir a senha de uma conta **ADMIN** exige também `current_password` (a senha de quem está executando) |
 | DELETE | `/api/users/:id` |
 | PUT | `/api/users/:id/contracts` — body `{ "contract_ids": [] }` |
 | PUT | `/api/users/:id/screens` — body `{ "screens": [] }` (telas do menu; rejeita ADMIN) |
@@ -397,7 +454,25 @@ O container do backend roda `prisma migrate deploy` antes de subir a API. O seed
 docker exec -it pbi-api npx prisma db seed
 ```
 
+> ⚠️ Este comando **não funciona na imagem de produção**: o seed roda via `tsx` e importa arquivos de `src/`, e nenhum dos dois existe na imagem final (que só contém `dist/` e as dependências de produção). Rode o seed a partir do host, com `npm run seed` e o `DATABASE_URL` apontando para o banco do container. Corrigir isso exige compilar o seed junto do build — fora do escopo desta rodada.
+
 O `nginx.conf` do frontend já faz proxy de `/api/` para `http://backend:3333/api/` — ajuste o host conforme a sua rede. Se preferir apontar direto para a API pública, use o `--build-arg VITE_API_URL` e ignore o bloco de proxy.
+
+### HTTPS
+
+O container do frontend escuta em HTTP porque quem termina o TLS é a camada da frente (load balancer, ingress ou proxy reverso). Essa camada precisa enviar `X-Forwarded-Proto`; quando ele chega como `http`, o nginx redireciona para HTTPS (301) e envia `Strict-Transport-Security` por 1 ano.
+
+Sem proxy na frente, o header não existe e nada é redirecionado — o ambiente local continua funcionando.
+
+Isso importa mais aqui do que numa aplicação comum: o **token de embed dos painéis viaja na query string**, e em HTTP ele fica legível para qualquer um no caminho da rede.
+
+> `includeSubDomains` só deve ficar ligado se **todos** os subdomínios tiverem HTTPS. O efeito dura 1 ano no navegador de quem já recebeu o header e não há como voltar atrás.
+
+### Usuário do container
+
+A imagem da API roda como o usuário não privilegiado `node` (uid 1000), não como root — rodar como root significa que qualquer execução remota de código na API começaria com privilégio total dentro do container. Ambas as imagens têm `HEALTHCHECK`, para o orquestrador distinguir "processo vivo" de "aplicação respondendo".
+
+O CLI do Prisma passou de `devDependency` para dependência de produção: sem isso, o `npx prisma migrate deploy` do `CMD` **baixaria o pacote da internet a cada start** do container — o que falha sob usuário não privilegiado e torna a subida dependente de rede externa.
 
 ---
 
