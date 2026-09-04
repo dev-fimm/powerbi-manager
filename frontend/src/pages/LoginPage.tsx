@@ -91,12 +91,6 @@ export function LoginPage() {
           <Button type="submit" loading={submitting} className="w-full">
             Entrar
           </Button>
-
-          <p className="rounded-lg bg-slate-50 p-3 text-center text-xs leading-relaxed text-slate-500">
-            Acesso inicial do seed:
-            <br />
-            <span className="font-mono text-slate-700">admin@sistema.com / admin123</span>
-          </p>
         </form>
       </div>
     </div>
