@@ -4,7 +4,11 @@ Sistema web para gerenciar **usuários**, **contratos** e os **iframes públicos
 
 - **Backend:** Node.js + Express + TypeScript + Prisma + PostgreSQL, autenticação JWT
 - **Frontend:** React + TypeScript + Vite + Tailwind CSS
-- **Renderização dos painéis:** elemento `<iframe>` nativo com URLs públicas do Power BI
+- **Renderização dos painéis:** `<iframe>` cujo `src` aponta para uma rota de embed da própria API (a URL do Power BI **não** é exposta ao cliente — ver [Segurança do embed](#segurança-do-embed))
+
+> 📘 Este README é o guia de **instalação e uso**. Para a **documentação técnica completa**
+> (arquitetura, modelo de dados, modelo de segurança em camadas e referência da API detalhada),
+> veja [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).
 
 ---
 
@@ -17,6 +21,9 @@ Sistema web para gerenciar **usuários**, **contratos** e os **iframes públicos
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Regras de negócio](#regras-de-negócio)
 - [Perfis de acesso](#perfis-de-acesso)
+- [Controle de acesso avançado](#controle-de-acesso-avançado)
+- [Segurança do embed](#segurança-do-embed)
+- [Auditoria (logs)](#auditoria-logs)
 - [Endpoints da API](#endpoints-da-api)
 - [Como obter a URL pública do Power BI](#como-obter-a-url-pública-do-power-bi)
 - [Docker](#docker)
@@ -39,8 +46,13 @@ powerbi-manager/
 │   │   │   ├── auth.ts          # autenticação JWT
 │   │   │   ├── rbac.ts          # controle de acesso por role
 │   │   │   └── error.ts         # tratamento global de erros
-│   │   ├── routes/              # auth, users, contracts, iframes, viewer, dashboard
-│   │   ├── utils/powerbi.ts     # validação da URL do Power BI
+│   │   ├── routes/              # auth, users, contracts, iframes, viewer, dashboard, logs
+│   │   ├── utils/
+│   │   │   ├── powerbi.ts       # validação da URL do Power BI
+│   │   │   ├── screens.ts       # catálogo de telas (permissões por conta)
+│   │   │   ├── embed.ts         # token de embed (oculta a URL do Power BI)
+│   │   │   ├── audit.ts         # registro de auditoria
+│   │   │   └── serialize.ts     # DTOs (camelCase → snake_case)
 │   │   ├── validators/schemas.ts# validação de payloads (zod)
 │   │   ├── app.ts
 │   │   └── server.ts
@@ -50,8 +62,8 @@ powerbi-manager/
     ├── src/
     │   ├── components/          # Layout, ProtectedRoute, UI (Button, Modal, Table, Card, Field)
     │   ├── contexts/            # AuthContext, ToastContext
-    │   ├── lib/api.ts           # cliente HTTP com JWT
-    │   ├── pages/               # Login, Dashboard, Users, Contracts, Iframes, Viewer
+    │   ├── lib/                 # api.ts (HTTP+JWT), format.ts, screens.ts
+    │   ├── pages/               # Login, Dashboard, Users, Contracts, Iframes, Paineis, Permissions, Logs
     │   └── types/
     ├── Dockerfile
     ├── nginx.conf
@@ -155,6 +167,10 @@ O frontend sobe em **http://localhost:5173**.
 
 > **Troque essas senhas antes de colocar em produção.**
 
+> ℹ️ O acesso do **VISUALIZADOR** aos painéis é **por dashboard** (modelo explícito): por padrão
+> ele não vê nenhum painel. Libere os painéis desejados na tela **Permissões → Acesso aos Paineis**.
+> Ver [Controle de acesso avançado](#controle-de-acesso-avançado).
+
 O seed também cria 2 contratos e 3 iframes de exemplo. As URLs do Power BI usadas são **placeholders no formato correto** (`https://app.powerbi.com/view?r=...`) — substitua pelos links reais dos seus relatórios para que os painéis carreguem.
 
 ---
@@ -189,8 +205,8 @@ O seed também cria 2 contratos e 3 iframes de exemplo. As URLs do Power BI usad
 2. **Controle por perfil** — ADMIN, GESTOR e VISUALIZADOR (detalhado abaixo).
 3. **Iframe sempre pertence a um contrato** — `contract_id` é obrigatório; não existe iframe órfão.
 4. **Validação da URL do Power BI** — só são aceitas URLs `https://app.powerbi.com/view` ou `https://app.powerbi.com/reportEmbed`. A validação usa o parser de URL (protocolo + host exatos), então tentativas como `https://app.powerbi.com.dominio-falso.com/view` são rejeitadas.
-5. **Iframe inativo não aparece** — `is_active = false` some da listagem pública e do Viewer.
-6. **Contrato encerrado bloqueia o Viewer** — com `status = ENCERRADO`, nenhum painel do contrato é exibido, mesmo com `is_active = true`.
+5. **Iframe inativo não aparece** — `is_active = false` some da listagem pública e da tela Paineis.
+6. **Contrato encerrado bloqueia a tela Paineis** — com `status = ENCERRADO`, nenhum painel do contrato é exibido, mesmo com `is_active = true`.
 7. **Cascade delete** — excluir um contrato remove seus iframes e as associações de usuário; excluir um usuário remove apenas as associações, **nunca** os contratos.
 
 Também estão implementados: usuário desativado perde acesso imediatamente (o token é revalidado contra o banco a cada requisição), e o ADMIN logado não consegue se auto-excluir, se desativar nem rebaixar o próprio perfil.
@@ -207,9 +223,51 @@ Também estão implementados: usuário desativado perde acesso imediatamente (o 
 | Editar contrato | ✅ | só os associados | ❌ |
 | Excluir contrato | ✅ | ❌ | ❌ |
 | Criar/editar/excluir iframe | ✅ | só nos contratos associados | ❌ |
-| Visualizar painéis (Viewer) | ✅ | ✅ | ✅ |
+| Visualizar painéis (tela **Paineis**) | todos | dos contratos associados | **só os painéis concedidos** |
 
 > Quando um GESTOR cria um contrato, ele é automaticamente associado a si mesmo — caso contrário perderia o acesso ao que acabou de criar.
+
+---
+
+## Controle de acesso avançado
+
+Além do perfil (RBAC), há dois controles **por conta**, gerenciados na tela **Permissões** (só ADMIN):
+
+### Permissões de tela (menu)
+Define **quais telas** aparecem no menu de cada conta e o acesso direto por URL. Substitui o menu padrão do perfil.
+
+- **ADMIN** sempre acessa todas as telas (não pode ser restringido).
+- Telas **configuráveis**: `Dashboard`, `Contratos`, `Iframes`, `Paineis`.
+- Telas **exclusivas de ADMIN** (nunca liberadas a outros perfis): `Usuários`, `Permissões`, `Logs`.
+- É controle de **navegação** (frontend). A autorização de **dados** continua sendo por perfil no backend.
+
+### Acesso por dashboard (só VISUALIZADOR)
+Distribui, por conta, **quais painéis** um VISUALIZADOR vê na tela **Paineis** (Permissões → "Acesso aos Paineis").
+
+- Modelo **explícito**: sem concessão, o VISUALIZADOR **não vê nenhum painel**.
+- Só se aplica ao VISUALIZADOR. GESTOR vê todos os painéis dos contratos associados; ADMIN vê tudo.
+- Aplicado no **backend** (rotas do viewer e no resumo do dashboard).
+
+---
+
+## Segurança do embed
+
+Para que o link público do Power BI (`?r=...`) não fique exposto na interface:
+
+1. A resposta do viewer **omite** `power_bi_url` e envia um **`embed_token`** curto (validade ~1h, específico do painel).
+2. O `<iframe>` aponta para `GET /api/viewer/iframes/:id/embed?t=<token>` — rota **pública** (o navegador não envia `Authorization` num iframe), que valida o token e **redireciona (302)** para a URL real.
+
+**Protege:** a URL real não aparece no JSON da API nem no `src` do iframe; o token só é emitido após validar o acesso da conta.
+
+**Limitação:** por ser "Publicar na web", a URL ainda aparece no header `Location` do redirect (visível na aba Network do DevTools). Ocultação total exige **Power BI Embedded** — ver [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).
+
+---
+
+## Auditoria (logs)
+
+Todas as ações relevantes são registradas na tabela `audit_logs` e consultadas na tela **Logs** (só ADMIN), com filtros (ação, usuário, texto, datas) e paginação.
+
+Ações registradas: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PAGE_VIEW` (tela acessada), e as operações de `USER_*`, `CONTRACT_*` e `IFRAME_*` (criar/editar/excluir), além de `USER_CONTRACTS`, `USER_SCREENS` e `USER_IFRAMES`.
 
 ---
 
@@ -221,6 +279,7 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | Método | Rota | Acesso |
 |---|---|---|
 | POST | `/api/auth/login` | público |
+| POST | `/api/auth/logout` | autenticado (registra auditoria) |
 | POST | `/api/auth/register` | ADMIN |
 | GET | `/api/auth/me` | autenticado |
 
@@ -233,6 +292,9 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | PUT | `/api/users/:id` |
 | DELETE | `/api/users/:id` |
 | PUT | `/api/users/:id/contracts` — body `{ "contract_ids": [] }` |
+| PUT | `/api/users/:id/screens` — body `{ "screens": [] }` (telas do menu; rejeita ADMIN) |
+| GET | `/api/users/:id/iframes` — retorna `{ "iframe_ids": [] }` concedidos |
+| PUT | `/api/users/:id/iframes` — body `{ "iframe_ids": [] }` (só VISUALIZADOR) |
 
 ### Contratos
 | Método | Rota | Acesso |
@@ -253,16 +315,23 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | PUT | `/api/iframes/:id` | ADMIN, GESTOR |
 | DELETE | `/api/iframes/:id` | ADMIN, GESTOR |
 
-### Viewer
-| Método | Rota |
-|---|---|
-| GET | `/api/viewer/contracts` |
-| GET | `/api/viewer/contracts/:id/iframes` |
+### Viewer (tela "Paineis")
+| Método | Rota | Acesso |
+|---|---|---|
+| GET | `/api/viewer/contracts` | autenticado (VISUALIZADOR: por concessão) |
+| GET | `/api/viewer/contracts/:id/iframes` | autenticado (retorna `embed_token`, sem `power_bi_url`) |
+| GET | `/api/viewer/iframes/:id/embed?t=<token>` | **público** (token de embed) → 302 para o Power BI |
 
 ### Dashboard
 | Método | Rota |
 |---|---|
 | GET | `/api/dashboard/summary` |
+
+### Logs (auditoria)
+| Método | Rota | Acesso |
+|---|---|---|
+| POST | `/api/logs/page-view` — body `{ "path": "", "label": "" }` | autenticado (qualquer perfil) |
+| GET | `/api/logs` (filtros: `?action=`, `?user_id=`, `?search=`, `?from=`, `?to=`, `?page=`, `?page_size=`) | ADMIN |
 
 ### Exemplo
 
@@ -340,7 +409,7 @@ O `nginx.conf` do frontend já faz proxy de `/api/` para `http://backend:3333/ap
 
 **Erro de CORS no navegador** — inclua a origem do frontend em `CORS_ORIGIN` no backend, ou use o proxy do Vite deixando `VITE_API_URL` vazio em desenvolvimento.
 
-**O painel aparece em branco no Viewer** — as URLs do seed são placeholders. Cadastre um link real de "Publicar na web". Se o link for real e ainda assim não carregar, verifique se a publicação pública não foi revogada no Power BI e se nenhuma política de rede da empresa bloqueia `app.powerbi.com`.
+**O painel aparece em branco na tela Paineis** — as URLs do seed são placeholders. Cadastre um link real de "Publicar na web". Se o link for real e ainda assim não carregar, verifique se a publicação pública não foi revogada no Power BI e se nenhuma política de rede da empresa bloqueia `app.powerbi.com`. Para o **VISUALIZADOR**, confirme também que o painel foi **concedido** à conta em Permissões → "Acesso aos Paineis".
 
 **`Sessão expirada`** logo após entrar — o `JWT_SECRET` mudou entre reinícios (por exemplo, ficou sem `.env`). Defina um valor fixo.
 
