@@ -1,0 +1,158 @@
+// ============================================================
+// Prisma schema - Sistema de gerenciamento de iframes Power BI
+// Banco: PostgreSQL
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  GESTOR
+  VISUALIZADOR
+}
+
+enum ContractStatus {
+  ATIVO
+  SUSPENSO
+  ENCERRADO
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  name          String
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  role          Role     @default(VISUALIZADOR)
+  isActive      Boolean  @default(true) @map("is_active")
+  // Telas que a conta pode acessar no frontend (ex.: "dashboard", "contracts").
+  // Substitui o menu padrao do perfil. ADMIN sempre acessa tudo (ignora esta lista).
+  allowedScreens String[] @default([]) @map("allowed_screens")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Ao excluir um usuario, apenas as associacoes sao removidas (cascade em UserContract).
+  // Os contratos NUNCA sao excluidos junto - regra de negocio 7.
+  contracts UserContract[]
+
+  // Logs de auditoria gerados por este usuario. Ao excluir o usuario, o vinculo
+  // vira null (onDelete: SetNull) para preservar o historico de auditoria.
+  auditLogs AuditLog[]
+
+  // Concessoes de dashboards (iframes) por conta. Usado apenas para VISUALIZADOR:
+  // o viewer desse perfil so exibe os iframes explicitamente concedidos aqui.
+  iframeGrants UserIframe[]
+
+  @@map("users")
+}
+
+model Contract {
+  id          String         @id @default(uuid()) @db.Uuid
+  name        String
+  clientName  String         @map("client_name")
+  description String?        @db.Text
+  startDate   DateTime       @map("start_date") @db.Date
+  endDate     DateTime       @map("end_date") @db.Date
+  status      ContractStatus @default(ATIVO)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  // Cascade delete: excluir o contrato remove seus iframes e suas associacoes.
+  iframes Iframe[]
+  users   UserContract[]
+
+  @@index([status])
+  @@map("contracts")
+}
+
+model Iframe {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  powerBiUrl  String   @map("power_bi_url")
+  description String?  @db.Text
+  contractId  String   @map("contract_id") @db.Uuid
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Todo iframe pertence obrigatoriamente a um contrato (regra 3).
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  // Contas (VISUALIZADOR) que tem acesso a este dashboard.
+  viewers UserIframe[]
+
+  @@index([contractId])
+  @@index([isActive])
+  @@map("iframes")
+}
+
+// ============================================================
+// Concessao de dashboard por conta (acesso individual a iframes).
+// Usado para distribuir, por VISUALIZADOR, quais paineis ele pode
+// ver no viewer. Sem concessao, o VISUALIZADOR nao ve nenhum painel.
+// ============================================================
+model UserIframe {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  iframeId  String   @map("iframe_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  iframe Iframe @relation(fields: [iframeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, iframeId])
+  @@index([userId])
+  @@index([iframeId])
+  @@map("user_iframes")
+}
+
+// ============================================================
+// Log de auditoria - registra as acoes dos usuarios no sistema
+// (login, logout, criacao/edicao/exclusao de usuarios, contratos
+// e iframes). Visivel apenas para ADMIN na tela de Logs.
+// ============================================================
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  // Autor da acao. Fica null quando a acao nao tem usuario logado
+  // (ex.: tentativa de login com e-mail inexistente) ou apos o usuario ser excluido.
+  userId      String?  @map("user_id") @db.Uuid
+  // Snapshot do autor no momento da acao: preserva o historico mesmo
+  // se o usuario for renomeado ou excluido depois.
+  userName    String?  @map("user_name")
+  userEmail   String?  @map("user_email")
+  action      String // ex.: LOGIN, USER_CREATE, CONTRACT_DELETE
+  entity      String? // ex.: User, Contract, Iframe
+  entityId    String?  @map("entity_id")
+  description String?  @db.Text
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model UserContract {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  contractId String   @map("contract_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contractId])
+  @@index([userId])
+  @@index([contractId])
+  @@map("user_contracts")
+}

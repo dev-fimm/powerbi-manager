@@ -1,0 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-800 antialiased;
+  }
+}
+
+@layer components {
+  .input-base {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800
+      placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2
+      focus:ring-brand-500/20 disabled:cursor-not-allowed disabled:bg-slate-100;
+  }
+
+  .label-base {
+    @apply mb-1.5 block text-sm font-medium text-slate-700;
+  }
+}
