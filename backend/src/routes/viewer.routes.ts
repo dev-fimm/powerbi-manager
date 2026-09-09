@@ -7,7 +7,7 @@ import {
   getAccessibleContractIds,
   getGrantedIframeIds,
   hasIframeLevelAccess,
-  isAdmin,
+  hasFullAccess,
 } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { verifyEmbedToken, signEmbedToken } from '../utils/embed';
@@ -109,7 +109,7 @@ viewerRoutes.get(
         _count: {
           select: {
             iframes: { where: { isActive: true } },
-            ...(isAdmin(req.user!) ? { users: true as const } : {}),
+            ...(hasFullAccess(req.user!) ? { users: true as const } : {}),
           },
         },
       },

@@ -6,7 +6,7 @@ import {
   getAccessibleContractIds,
   getGrantedIframeIds,
   hasIframeLevelAccess,
-  isAdmin,
+  hasFullAccess,
 } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 
@@ -18,7 +18,7 @@ dashboardRoutes.use(authenticate);
  * GET /api/dashboard/summary
  * Contadores da pagina inicial. Sempre respeitam o escopo do usuario:
  * GESTOR/VISUALIZADOR so contam os contratos associados a eles.
- * O total de usuarios so e retornado para ADMIN.
+ * O total de usuarios so e retornado para ADMIN e DESENVOLVEDOR.
  */
 dashboardRoutes.get(
   '/summary',
@@ -76,10 +76,10 @@ dashboardRoutes.get(
       prisma.contract.count({ where: { ...contractScope, status: ContractStatus.ENCERRADO } }),
       prisma.iframe.count({ where: iframeScope }),
       prisma.iframe.count({ where: { ...iframeScope, isActive: true } }),
-      isAdmin(req.user) ? prisma.user.count() : Promise.resolve(null),
+      hasFullAccess(req.user) ? prisma.user.count() : Promise.resolve(null),
     ]);
 
-    const activeUsers = isAdmin(req.user)
+    const activeUsers = hasFullAccess(req.user)
       ? await prisma.user.count({ where: { isActive: true } })
       : null;
 

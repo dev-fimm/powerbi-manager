@@ -31,6 +31,7 @@ export function toDateInput(value: string | null | undefined): string {
 
 export const ROLE_LABEL: Record<Role, string> = {
   ADMIN: 'Administrador',
+  DESENVOLVEDOR: 'Desenvolvedor',
   GESTOR: 'Gestor',
   VISUALIZADOR: 'Visualizador',
 };

@@ -10,6 +10,7 @@ import { useToast } from '../contexts/ToastContext';
 import { ApiError, api } from '../lib/api';
 import { formatDate } from '../lib/format';
 import { checkPassword, generatePassword } from '../lib/password';
+import { ADMIN_PROTECTED_HINT, canManageUser, hasFullAccessRole } from '../lib/roles';
 import type { Contract, Role, User } from '../types';
 
 interface FormState {
@@ -18,7 +19,7 @@ interface FormState {
   password: string;
   role: Role;
   isActive: boolean;
-  /** Senha do ADMIN logado, exigida para redefinir a senha de outro ADMIN. */
+  /** Senha do usuario logado, exigida para redefinir a senha de outra conta de gestao. */
   currentPassword: string;
 }
 
@@ -84,11 +85,24 @@ export function UsersPage() {
   );
 
   /**
-   * Redefinir a senha de uma conta ADMIN exige que o administrador confirme a
-   * PROPRIA senha. Sem isso, um admin assumia a conta de outro em silencio -
-   * e passava a agir na auditoria com o nome dele.
+   * Redefinir a senha de uma conta de gestao (ADMIN ou DESENVOLVEDOR) exige que
+   * quem esta editando confirme a PROPRIA senha. Sem isso, uma conta assumia a
+   * outra em silencio - e passava a agir na auditoria com o nome dela.
    */
-  const needsReauth = Boolean(editing && editing.role === 'ADMIN' && form.password);
+  const needsReauth = Boolean(editing && hasFullAccessRole(editing.role) && form.password);
+
+  /**
+   * DESENVOLVEDOR tem os mesmos acessos do ADMIN, com uma unica excecao: nao
+   * altera nem remove conta ADMIN. O backend recusa de qualquer forma; aqui a
+   * interface desabilita as acoes para nao oferecer o que vai falhar.
+   */
+  const canEdit = useCallback(
+    (target: User) => canManageUser(currentUser?.role, target),
+    [currentUser?.role],
+  );
+
+  /** DESENVOLVEDOR tambem nao pode conceder o perfil ADMIN a ninguem. */
+  const canGrantAdmin = currentUser?.role !== 'DESENVOLVEDOR';
 
   /**
    * Preenche o campo com uma senha forte gerada na hora. Nao substitui a
@@ -238,8 +252,8 @@ export function UsersPage() {
       key: 'contracts',
       header: 'Contratos',
       render: (u) =>
-        u.role === 'ADMIN' ? (
-          <span className="text-xs text-slate-500">Todos (ADMIN)</span>
+        hasFullAccessRole(u.role) ? (
+          <span className="text-xs text-slate-500">Todos ({u.role})</span>
         ) : (
           <span className="tabular-nums text-slate-600">{u.contracts?.length ?? 0}</span>
         ),
@@ -254,25 +268,36 @@ export function UsersPage() {
       key: 'actions',
       header: 'Acoes',
       className: 'text-right',
-      render: (u) => (
-        <div className="flex justify-end gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => openLinkModal(u)} disabled={u.role === 'ADMIN'}>
-            Contratos
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => openEdit(u)}>
-            Editar
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-rose-600 hover:bg-rose-50"
-            onClick={() => setDeleting(u)}
-            disabled={u.id === currentUser?.id}
-          >
-            Excluir
-          </Button>
-        </div>
-      ),
+      render: (u) => {
+        // Conta ADMIN vista por um DESENVOLVEDOR: somente leitura.
+        const locked = !canEdit(u);
+        const lockHint = locked ? ADMIN_PROTECTED_HINT : undefined;
+
+        return (
+          <div className="flex justify-end gap-1.5" title={lockHint}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => openLinkModal(u)}
+              disabled={locked || hasFullAccessRole(u.role)}
+            >
+              Contratos
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => openEdit(u)} disabled={locked}>
+              Editar
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-rose-600 hover:bg-rose-50"
+              onClick={() => setDeleting(u)}
+              disabled={locked || u.id === currentUser?.id}
+            >
+              Excluir
+            </Button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -410,12 +435,17 @@ export function UsersPage() {
             hint={
               form.role === 'ADMIN'
                 ? 'Acesso total a todos os contratos, usuarios e telas.'
-                : form.role === 'GESTOR'
-                  ? 'Gerencia contratos e iframes dos contratos associados.'
-                  : 'Apenas visualiza os paineis dos contratos associados.'
+                : form.role === 'DESENVOLVEDOR'
+                  ? 'Os mesmos acessos do Administrador, exceto alterar ou remover contas Administrador.'
+                  : form.role === 'GESTOR'
+                    ? 'Gerencia contratos e iframes dos contratos associados.'
+                    : 'Apenas visualiza os paineis dos contratos associados.'
             }
           >
-            <option value="ADMIN">Administrador</option>
+            {/* Um DESENVOLVEDOR nao concede ADMIN: senao criaria uma conta que
+                nao pode mais gerenciar, mas cuja senha ele acabou de definir. */}
+            {canGrantAdmin && <option value="ADMIN">Administrador</option>}
+            <option value="DESENVOLVEDOR">Desenvolvedor</option>
             <option value="GESTOR">Gestor</option>
             <option value="VISUALIZADOR">Visualizador</option>
           </Select>
@@ -428,9 +458,9 @@ export function UsersPage() {
             />
           </div>
 
-          {/* Contas nao-ADMIN nascem so com a tela de Paineis. Sem este aviso,
-              o admin cria o usuario e estranha o menu curto no primeiro login. */}
-          {!editing && form.role !== 'ADMIN' && (
+          {/* Contas sem acesso total nascem so com a tela de Paineis. Sem este
+              aviso, cria-se o usuario e estranha-se o menu curto no 1o login. */}
+          {!editing && !hasFullAccessRole(form.role) && (
             <p className="rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600 sm:col-span-2">
               Esta conta sera criada com acesso apenas a tela <strong>Paineis</strong>. As demais
               telas (Dashboard, Contratos e Iframes) sao liberadas depois, em{' '}

@@ -30,7 +30,7 @@ const EMPTY_FORM: FormState = {
 };
 
 export function ContractsPage() {
-  const { isAdmin, canManage } = useAuth();
+  const { hasFullAccess, canManage } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -175,8 +175,8 @@ export function ContractsPage() {
               Editar
             </Button>
           )}
-          {/* Excluir contrato: apenas ADMIN (regra 2). */}
-          {isAdmin && (
+          {/* Excluir contrato: apenas ADMIN/DESENVOLVEDOR (regra 2). */}
+          {hasFullAccess && (
             <Button size="sm" variant="ghost" className="text-rose-600 hover:bg-rose-50" onClick={() => setDeleting(c)}>
               Excluir
             </Button>

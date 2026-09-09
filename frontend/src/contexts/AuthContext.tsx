@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { UNAUTHORIZED_EVENT, api, tokenStorage, userStorage } from '../lib/api';
+import { hasFullAccessRole } from '../lib/roles';
 import type { LoginResponse, Role, User } from '../types';
 
 interface AuthContextValue {
@@ -19,8 +20,11 @@ interface AuthContextValue {
   hasRole: (...roles: Role[]) => boolean;
   /** true se a conta puder acessar a tela informada (por chave). */
   hasScreen: (screen: string) => boolean;
+  /** ADMIN estrito. Use para o que so o administrador pode fazer. */
   isAdmin: boolean;
-  /** ADMIN ou GESTOR: perfis que podem criar/editar. */
+  /** ADMIN ou DESENVOLVEDOR: perfis que enxergam e gerenciam tudo. */
+  hasFullAccess: boolean;
+  /** ADMIN, DESENVOLVEDOR ou GESTOR: perfis que podem criar/editar. */
   canManage: boolean;
 }
 
@@ -83,7 +87,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hasRole: (...roles: Role[]) => (user ? roles.includes(user.role) : false),
       hasScreen: (screen: string) => user?.allowed_screens?.includes(screen) ?? false,
       isAdmin: user?.role === 'ADMIN',
-      canManage: user?.role === 'ADMIN' || user?.role === 'GESTOR',
+      hasFullAccess: hasFullAccessRole(user?.role),
+      canManage: hasFullAccessRole(user?.role) || user?.role === 'GESTOR',
     }),
     [user, loading, login, logout],
   );

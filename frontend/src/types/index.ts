@@ -1,4 +1,4 @@
-export type Role = 'ADMIN' | 'GESTOR' | 'VISUALIZADOR';
+export type Role = 'ADMIN' | 'DESENVOLVEDOR' | 'GESTOR' | 'VISUALIZADOR';
 export type ContractStatus = 'ATIVO' | 'SUSPENSO' | 'ENCERRADO';
 
 export interface User {
@@ -7,7 +7,7 @@ export interface User {
   email: string;
   role: Role;
   is_active: boolean;
-  /** Telas que a conta pode acessar no menu (efetivas; ADMIN recebe todas). */
+  /** Telas que a conta pode acessar no menu (efetivas; ADMIN e DESENVOLVEDOR recebem todas). */
   allowed_screens: string[];
   created_at: string;
   updated_at: string;

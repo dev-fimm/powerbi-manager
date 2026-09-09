@@ -1,11 +1,15 @@
 import bcrypt from 'bcryptjs';
-import { Role } from '@prisma/client';
 import { Router } from 'express';
 import { env } from '../config/env';
 import { prisma } from '../lib/prisma';
 import { authenticate } from '../middlewares/auth';
-import { requireAdmin } from '../middlewares/rbac';
-import { hasIframeLevelAccess } from '../middlewares/rbac';
+import {
+  FULL_ACCESS_ROLES,
+  assertCanAssignRole,
+  assertCanManageUser,
+  hasIframeLevelAccess,
+  requireFullAccess,
+} from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { AppError, ConflictError, NotFoundError, UnauthorizedError } from '../utils/errors';
@@ -26,8 +30,10 @@ import {
 
 export const userRoutes = Router();
 
-// Todas as rotas de usuario exigem autenticacao + perfil ADMIN (regra 2).
-userRoutes.use(authenticate, requireAdmin);
+// Todas as rotas de usuario exigem autenticacao + perfil de gestao (regra 2):
+// ADMIN ou DESENVOLVEDOR. O que o DESENVOLVEDOR nao pode e escrever numa conta
+// ADMIN - cada rota de escrita abaixo chama assertCanManageUser.
+userRoutes.use(authenticate, requireFullAccess);
 
 /** GET /api/users */
 userRoutes.get(
@@ -62,6 +68,8 @@ userRoutes.post(
   '/',
   asyncHandler(async (req, res) => {
     const data = createUserSchema.parse(req.body);
+
+    assertCanAssignRole(req.user!, data.role);
 
     const exists = await prisma.user.findUnique({ where: { email: data.email } });
     if (exists) throw new ConflictError('Ja existe um usuario com este e-mail.');
@@ -105,6 +113,10 @@ userRoutes.put(
     const current = await prisma.user.findUnique({ where: { id } });
     if (!current) throw new NotFoundError('Usuario nao encontrado.');
 
+    // DESENVOLVEDOR nao escreve em conta ADMIN, nem promove ninguem a ADMIN.
+    assertCanManageUser(req.user!, current);
+    assertCanAssignRole(req.user!, data.role);
+
     if (data.email && data.email !== current.email) {
       const emailTaken = await prisma.user.findUnique({ where: { email: data.email } });
       if (emailTaken) throw new ConflictError('Ja existe um usuario com este e-mail.');
@@ -121,17 +133,20 @@ userRoutes.put(
     }
 
     /**
-     * Rebaixar um ADMIN para GESTOR/VISUALIZADOR.
+     * Rebaixar uma conta de acesso total (ADMIN/DESENVOLVEDOR) para
+     * GESTOR/VISUALIZADOR.
      *
-     * A conta guarda em allowed_screens a lista completa do ADMIN. Ao perder o
+     * A conta guarda em allowed_screens a lista completa de telas. Ao perder o
      * perfil, effectiveScreens passaria a filtrar essa lista pelas telas
      * configuraveis e devolveria as QUATRO (dashboard, contracts, iframes,
-     * viewer) - contornando a regra de que conta nao-admin comeca apenas com
-     * Paineis. Redefine para o padrao do novo perfil; o resto se libera
+     * viewer) - contornando a regra de que conta sem acesso total comeca apenas
+     * com Paineis. Redefine para o padrao do novo perfil; o resto se libera
      * explicitamente na tela de Permissoes.
      */
-    const demotedFromAdmin =
-      data.role !== undefined && current.role === Role.ADMIN && data.role !== Role.ADMIN;
+    const demotedFromFullAccess =
+      data.role !== undefined &&
+      FULL_ACCESS_ROLES.includes(current.role) &&
+      !FULL_ACCESS_ROLES.includes(data.role);
 
     if (data.password) {
       // A senha nao pode conter o nome/e-mail da conta alvo (usa os valores
@@ -144,17 +159,19 @@ userRoutes.put(
       if (personal.length > 0) throw new AppError(personal[0]!.message, 422);
 
       /**
-       * Reautenticacao para redefinir a senha de uma conta ADMIN.
+       * Reautenticacao para redefinir a senha de uma conta de acesso total
+       * (ADMIN ou DESENVOLVEDOR).
        *
-       * Sem isto, qualquer administrador assumia a conta de outro apenas
-       * trocando a senha dele - escalada lateral silenciosa entre admins, e o
-       * bastante para fraudar a trilha de auditoria agindo como outra pessoa.
-       * Contas GESTOR/VISUALIZADOR seguem no fluxo normal de reset pelo admin.
+       * Sem isto, quem gerencia usuarios assumia a conta de outro apenas
+       * trocando a senha dele - escalada lateral silenciosa entre contas
+       * privilegiadas, e o bastante para fraudar a trilha de auditoria agindo
+       * como outra pessoa. Contas GESTOR/VISUALIZADOR seguem no fluxo normal
+       * de reset.
        */
-      if (current.role === Role.ADMIN) {
+      if (FULL_ACCESS_ROLES.includes(current.role)) {
         if (!data.current_password) {
           throw new AppError(
-            'Para redefinir a senha de um administrador, confirme a sua propria senha.',
+            'Para redefinir a senha de uma conta de gestao, confirme a sua propria senha.',
             403,
           );
         }
@@ -169,7 +186,7 @@ userRoutes.put(
             action: AuditAction.LOGIN_FAILED,
             entity: 'User',
             entityId: id,
-            description: `Reautenticacao incorreta ao tentar redefinir a senha do administrador "${current.name}".`,
+            description: `Reautenticacao incorreta ao tentar redefinir a senha da conta de gestao "${current.name}".`,
           });
           throw new UnauthorizedError('Sua senha de confirmacao esta incorreta.');
         }
@@ -187,7 +204,9 @@ userRoutes.put(
         ...(data.password
           ? { passwordHash: await bcrypt.hash(data.password, env.bcryptSaltRounds) }
           : {}),
-        ...(demotedFromAdmin ? { allowedScreens: defaultScreensForRole(data.role!) } : {}),
+        ...(demotedFromFullAccess
+          ? { allowedScreens: defaultScreensForRole(data.role!) }
+          : {}),
       },
       include: { contracts: { include: { contract: true } } },
     });
@@ -231,6 +250,8 @@ userRoutes.delete(
     const user = await prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundError('Usuario nao encontrado.');
 
+    assertCanManageUser(req.user!, user);
+
     await prisma.user.delete({ where: { id } });
 
     await recordLog(req, {
@@ -257,6 +278,8 @@ userRoutes.put(
 
     const user = await prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundError('Usuario nao encontrado.');
+
+    assertCanManageUser(req.user!, user);
 
     // Valida que todos os contratos informados existem antes de gravar.
     if (contractIds.length > 0) {
@@ -312,9 +335,11 @@ userRoutes.put(
     const user = await prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundError('Usuario nao encontrado.');
 
-    if (user.role === Role.ADMIN) {
+    assertCanManageUser(req.user!, user);
+
+    if (FULL_ACCESS_ROLES.includes(user.role)) {
       throw new AppError(
-        'O perfil ADMIN acessa todas as telas e nao pode ser restringido.',
+        `O perfil ${user.role} acessa todas as telas e nao pode ser restringido.`,
         400,
       );
     }
@@ -376,10 +401,12 @@ userRoutes.put(
     const user = await prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundError('Usuario nao encontrado.');
 
+    assertCanManageUser(req.user!, user);
+
     if (!hasIframeLevelAccess(user)) {
       throw new AppError(
         'A concessao por dashboard so se aplica ao perfil VISUALIZADOR. ' +
-          'GESTOR ve os paineis dos contratos associados e ADMIN ve todos.',
+          'GESTOR ve os paineis dos contratos associados; ADMIN e DESENVOLVEDOR veem todos.',
         400,
       );
     }

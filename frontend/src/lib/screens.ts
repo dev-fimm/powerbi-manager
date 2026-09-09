@@ -20,7 +20,7 @@ export const MANAGEABLE_SCREENS: ScreenDef[] = [
   { key: 'viewer', label: 'Paineis', path: '/paineis' },
 ];
 
-/** Telas exclusivas de ADMIN (nunca liberadas para outras contas). */
+/** Telas de gestao: so ADMIN e DESENVOLVEDOR (nunca liberadas para as demais). */
 export const ADMIN_SCREENS: ScreenDef[] = [
   { key: 'users', label: 'Usuarios', path: '/users' },
   { key: 'permissions', label: 'Permissoes', path: '/permissions' },

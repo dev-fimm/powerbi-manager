@@ -208,7 +208,7 @@ A geração usa `crypto.getRandomValues` (CSPRNG do navegador), **não** `Math.r
 
 **Trocar a própria senha:** botão **Alterar senha** no topo, disponível para qualquer perfil. Exige a senha atual, mesmo com a sessão já autenticada — é o que impede que um token roubado vire posse permanente da conta.
 
-**Redefinir a senha de um ADMIN:** exige que o administrador confirme a própria senha. Sem isso, um admin assumiria a conta de outro em silêncio e passaria a agir na auditoria com o nome dele. Contas GESTOR e VISUALIZADOR seguem no fluxo normal de reset.
+**Redefinir a senha de uma conta de gestão (ADMIN ou DESENVOLVEDOR):** exige que quem está executando confirme a própria senha. Sem isso, uma conta privilegiada assumiria a outra em silêncio e passaria a agir na auditoria com o nome dela. Contas GESTOR e VISUALIZADOR seguem no fluxo normal de reset. (Um DESENVOLVEDOR não chega a esse ponto com um alvo ADMIN: a alteração é recusada antes.)
 
 > Ainda **não** existe "esqueci minha senha" por e-mail: isso depende de infraestrutura de envio (SMTP) que o projeto não tem. Hoje a recuperação é feita por um ADMIN, pela tela de Usuários.
 
@@ -244,56 +244,68 @@ Definida em [`backend/src/utils/password.ts`](backend/src/utils/password.ts) e e
 ## Regras de negócio
 
 1. **Autenticação obrigatória** — todas as rotas exigem JWT válido, exceto `POST /api/auth/login`.
-2. **Controle por perfil** — ADMIN, GESTOR e VISUALIZADOR (detalhado abaixo).
+2. **Controle por perfil** — ADMIN, DESENVOLVEDOR, GESTOR e VISUALIZADOR (detalhado abaixo).
 3. **Iframe sempre pertence a um contrato** — `contract_id` é obrigatório; não existe iframe órfão.
 4. **Validação da URL do Power BI** — só são aceitas URLs `https://app.powerbi.com/view` ou `https://app.powerbi.com/reportEmbed`. A validação usa o parser de URL (protocolo + host exatos), então tentativas como `https://app.powerbi.com.dominio-falso.com/view` são rejeitadas.
 5. **Iframe inativo não aparece** — `is_active = false` some da listagem pública e da tela Paineis.
 6. **Contrato encerrado bloqueia a tela Paineis** — com `status = ENCERRADO`, nenhum painel do contrato é exibido, mesmo com `is_active = true`.
 7. **Cascade delete** — excluir um contrato remove seus iframes e as associações de usuário; excluir um usuário remove apenas as associações, **nunca** os contratos.
 
-Também estão implementados: usuário desativado perde acesso imediatamente (o token é revalidado contra o banco a cada requisição), e o ADMIN logado não consegue se auto-excluir, se desativar nem rebaixar o próprio perfil.
+Também estão implementados: usuário desativado perde acesso imediatamente (o token é revalidado contra o banco a cada requisição), e quem está logado não consegue se auto-excluir, se desativar nem rebaixar o próprio perfil.
 
 ---
 
 ## Perfis de acesso
 
-| Ação | ADMIN | GESTOR | VISUALIZADOR |
-|---|:--:|:--:|:--:|
-| Gerenciar usuários | ✅ | ❌ | ❌ |
-| Listar contratos | todos | associados | associados |
-| Criar contrato | ✅ | ✅ | ❌ |
-| Editar contrato | ✅ | só os associados | ❌ |
-| Excluir contrato | ✅ | ❌ | ❌ |
-| Criar/editar/excluir iframe | ✅ | só nos contratos associados | ❌ |
-| Visualizar painéis (tela **Paineis**) | todos | dos contratos associados | **só os painéis concedidos** |
+| Ação | ADMIN | DESENVOLVEDOR | GESTOR | VISUALIZADOR |
+|---|:--:|:--:|:--:|:--:|
+| Gerenciar usuários | ✅ | ✅ (exceto contas ADMIN) | ❌ | ❌ |
+| Listar contratos | todos | todos | associados | associados |
+| Criar contrato | ✅ | ✅ | ✅ | ❌ |
+| Editar contrato | ✅ | ✅ | só os associados | ❌ |
+| Excluir contrato | ✅ | ✅ | ❌ | ❌ |
+| Criar/editar/excluir iframe | ✅ | ✅ | só nos contratos associados | ❌ |
+| Visualizar painéis (tela **Paineis**) | todos | todos | dos contratos associados | **só os painéis concedidos** |
 
 > Quando um GESTOR cria um contrato, ele é automaticamente associado a si mesmo — caso contrário perderia o acesso ao que acabou de criar.
+
+### DESENVOLVEDOR
+
+Tem **os mesmos acessos do ADMIN**, com uma única restrição: **não altera nem remove nenhuma conta ADMIN**. Na prática, para um alvo com perfil ADMIN o backend responde `403` em:
+
+- `PUT /api/users/:id` — nome, e-mail, perfil, status e senha;
+- `PUT /api/users/:id/contracts`, `/screens`, `/iframes`;
+- `DELETE /api/users/:id`.
+
+Ele também **não pode conceder o perfil ADMIN** a ninguém (nem ao criar, nem ao editar). Sem isso a restrição seria contornável em dois passos: criar um ADMIN com uma senha conhecida, entrar com ele e então mexer nos demais administradores.
+
+Contas GESTOR, VISUALIZADOR e DESENVOLVEDOR ele gerencia normalmente — inclusive outras contas DESENVOLVEDOR.
 
 ---
 
 ## Controle de acesso avançado
 
-Além do perfil (RBAC), há dois controles **por conta**, gerenciados na tela **Permissões** (só ADMIN):
+Além do perfil (RBAC), há dois controles **por conta**, gerenciados na tela **Permissões** (só ADMIN e DESENVOLVEDOR):
 
 ### Permissões de tela (menu)
 Define **quais telas** aparecem no menu de cada conta e o acesso direto por URL. Substitui o menu padrão do perfil.
 
-- **ADMIN** sempre acessa todas as telas (não pode ser restringido).
+- **ADMIN** e **DESENVOLVEDOR** sempre acessam todas as telas (não podem ser restringidos).
 - Telas **configuráveis**: `Dashboard`, `Contratos`, `Iframes`, `Paineis`.
-- Telas **exclusivas de ADMIN** (nunca liberadas a outros perfis): `Usuários`, `Permissões`, `Logs`.
+- Telas **de gestão** (só ADMIN e DESENVOLVEDOR, nunca liberadas aos demais perfis): `Usuários`, `Permissões`, `Logs`.
 - É controle de **navegação** (frontend). A autorização de **dados** continua sendo por perfil no backend.
 
 **Telas iniciais de uma conta nova:** GESTOR e VISUALIZADOR são criados com acesso **apenas a `Paineis`**. `Dashboard`, `Contratos` e `Iframes` são liberados depois, conta a conta, aqui em Permissões.
 
 É privilégio mínimo: a conta nasce com o necessário para a finalidade dela e cresce por decisão explícita. Antes, toda conta nova já vinha com as quatro telas — na prática ninguém *removia* acesso, apenas esquecia de remover.
 
-> Contas **já existentes não são afetadas** — a regra vale no momento da criação. A exceção é o rebaixamento de um ADMIN para GESTOR/VISUALIZADOR: aí as telas voltam ao padrão do novo perfil, senão a conta manteria a lista completa que tinha como administrador.
+> Contas **já existentes não são afetadas** — a regra vale no momento da criação. A exceção é o rebaixamento de uma conta de acesso total (ADMIN/DESENVOLVEDOR) para GESTOR/VISUALIZADOR: aí as telas voltam ao padrão do novo perfil, senão a conta manteria a lista completa que tinha antes.
 
 ### Acesso por dashboard (só VISUALIZADOR)
 Distribui, por conta, **quais painéis** um VISUALIZADOR vê na tela **Paineis** (Permissões → "Acesso aos Paineis").
 
 - Modelo **explícito**: sem concessão, o VISUALIZADOR **não vê nenhum painel**.
-- Só se aplica ao VISUALIZADOR. GESTOR vê todos os painéis dos contratos associados; ADMIN vê tudo.
+- Só se aplica ao VISUALIZADOR. GESTOR vê todos os painéis dos contratos associados; ADMIN e DESENVOLVEDOR veem tudo.
 - Aplicado no **backend** (rotas do viewer e no resumo do dashboard).
 
 ---
@@ -340,16 +352,16 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | POST | `/api/auth/change-password` | autenticado — body `{ "current_password": "", "new_password": "" }` |
 | GET | `/api/auth/me` | autenticado |
 
-### Usuários (ADMIN)
+### Usuários (ADMIN e DESENVOLVEDOR)
 | Método | Rota |
 |---|---|
 | GET | `/api/users` |
 | GET | `/api/users/:id` |
 | POST | `/api/users` |
-| PUT | `/api/users/:id` — redefinir a senha de uma conta **ADMIN** exige também `current_password` (a senha de quem está executando) |
+| PUT | `/api/users/:id` — redefinir a senha de uma conta **ADMIN/DESENVOLVEDOR** exige também `current_password` (a senha de quem está executando) |
 | DELETE | `/api/users/:id` |
 | PUT | `/api/users/:id/contracts` — body `{ "contract_ids": [] }` |
-| PUT | `/api/users/:id/screens` — body `{ "screens": [] }` (telas do menu; rejeita ADMIN) |
+| PUT | `/api/users/:id/screens` — body `{ "screens": [] }` (telas do menu; rejeita ADMIN e DESENVOLVEDOR) |
 | GET | `/api/users/:id/iframes` — retorna `{ "iframe_ids": [] }` concedidos |
 | PUT | `/api/users/:id/iframes` — body `{ "iframe_ids": [] }` (só VISUALIZADOR) |
 

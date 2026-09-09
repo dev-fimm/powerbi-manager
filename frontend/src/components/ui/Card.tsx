@@ -72,6 +72,7 @@ export function StatusBadge({ status }: { status: ContractStatus }) {
 
 const ROLE_STYLES: Record<Role, string> = {
   ADMIN: 'bg-brand-50 text-brand-700 ring-brand-600/20',
+  DESENVOLVEDOR: 'bg-cyan-50 text-cyan-700 ring-cyan-600/20',
   GESTOR: 'bg-violet-50 text-violet-700 ring-violet-600/20',
   VISUALIZADOR: 'bg-slate-100 text-slate-600 ring-slate-500/20',
 };

@@ -6,6 +6,7 @@ import { Table, type Column } from '../components/ui/Table';
 import { useToast } from '../contexts/ToastContext';
 import { ApiError, api } from '../lib/api';
 import { MANAGEABLE_SCREENS } from '../lib/screens';
+import { hasFullAccessRole } from '../lib/roles';
 import type { Iframe, User } from '../types';
 
 const MANAGEABLE_KEYS = MANAGEABLE_SCREENS.map((s) => s.key);
@@ -141,8 +142,8 @@ export function PermissionsPage() {
       header: screen.label,
       className: 'text-center',
       render: (u) =>
-        u.role === 'ADMIN' ? (
-          <span className="text-brand-500" title="ADMIN acessa todas as telas">
+        hasFullAccessRole(u.role) ? (
+          <span className="text-brand-500" title={`${u.role} acessa todas as telas`}>
             <svg className="mx-auto h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
@@ -163,7 +164,7 @@ export function PermissionsPage() {
       header: 'Acoes',
       className: 'text-right',
       render: (u) =>
-        u.role === 'ADMIN' ? (
+        hasFullAccessRole(u.role) ? (
           <span className="text-xs text-slate-500">Todas as telas</span>
         ) : (
           <Button
@@ -248,7 +249,7 @@ export function PermissionsPage() {
           <p>
             <strong>Telas</strong> controlam o menu de cada conta. <strong>Dashboards</strong>{' '}
             controlam quais paineis um VISUALIZADOR ve na tela Paineis &mdash; sem concessao, ele nao ve
-            nenhum painel. ADMIN acessa tudo.
+            nenhum painel. ADMIN e DESENVOLVEDOR acessam tudo.
           </p>
         </div>
       </div>
@@ -269,7 +270,8 @@ export function PermissionsPage() {
       <section>
         <h2 className="mb-1 text-lg font-semibold text-slate-900">Acesso aos Paineis</h2>
         <p className="mb-3 text-sm text-slate-500">
-          Distribua o acesso aos paineis por conta VISUALIZADOR. Aplica-se somente a este perfil.
+          Distribua o acesso aos paineis por conta VISUALIZADOR. Aplica-se somente a este
+          perfil: GESTOR ve os paineis dos contratos associados, ADMIN e DESENVOLVEDOR veem todos.
         </p>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

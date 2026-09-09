@@ -23,8 +23,8 @@ export function App() {
         }
       >
         {/* Cada tela e liberada por conta (gestao de acesso por conta).
-            ADMIN sempre tem todas as telas; as telas de gestao (users,
-            permissions, logs) sao exclusivas de ADMIN. */}
+            ADMIN e DESENVOLVEDOR sempre tem todas as telas; as telas de gestao
+            (users, permissions, logs) sao exclusivas desses dois perfis. */}
         <Route
           index
           element={

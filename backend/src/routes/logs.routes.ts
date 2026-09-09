@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticate } from '../middlewares/auth';
-import { requireAdmin } from '../middlewares/rbac';
+import { requireFullAccess } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { serializeAuditLog } from '../utils/serialize';
@@ -34,7 +34,7 @@ logRoutes.post(
 );
 
 // A partir daqui, a consulta da auditoria e restrita a ADMIN (regra 2).
-logRoutes.use(requireAdmin);
+logRoutes.use(requireFullAccess);
 
 /**
  * Converte "yyyy-mm-dd" em Date. Para o limite superior (to) usa o fim do dia

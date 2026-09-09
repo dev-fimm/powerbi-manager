@@ -14,7 +14,7 @@ const icon = (d: string) => (
 );
 
 export function DashboardPage() {
-  const { user, isAdmin } = useAuth();
+  const { user, hasFullAccess } = useAuth();
   const toast = useToast();
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -66,8 +66,8 @@ export function DashboardPage() {
           tone="amber"
           icon={icon('M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z')}
         />
-        {/* Card de usuarios: apenas ADMIN (a API tambem so retorna nesse perfil). */}
-        {isAdmin && (
+        {/* Card de usuarios: so ADMIN/DESENVOLVEDOR (a API tambem so retorna neles). */}
+        {hasFullAccess && (
           <StatCard
             label="Usuarios"
             value={loading ? '-' : (summary?.users?.total ?? 0)}

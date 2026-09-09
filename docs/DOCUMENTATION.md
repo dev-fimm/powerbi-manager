@@ -110,7 +110,7 @@ powerbi-manager/
 
 ## 4. Modelo de dados
 
-Enums: `Role` = `ADMIN | GESTOR | VISUALIZADOR`; `ContractStatus` = `ATIVO | SUSPENSO | ENCERRADO`.
+Enums: `Role` = `ADMIN | DESENVOLVEDOR | GESTOR | VISUALIZADOR`; `ContractStatus` = `ATIVO | SUSPENSO | ENCERRADO`.
 
 ### Tabelas
 
@@ -175,39 +175,56 @@ imediatamente, sem esperar o token expirar.
 ### Camada 2 — Perfil (RBAC) — autorização de **dados** (backend)
 Definido em `middlewares/rbac.ts`. É o limite de segurança dos dados.
 
-| Ação | ADMIN | GESTOR | VISUALIZADOR |
-|---|:--:|:--:|:--:|
-| Gerenciar usuários / permissões / logs | ✅ | ❌ | ❌ |
-| Listar contratos | todos | associados | associados |
-| Criar contrato | ✅ | ✅ | ❌ |
-| Editar contrato | ✅ | só associados | ❌ |
-| Excluir contrato | ✅ | ❌ | ❌ |
-| Criar/editar/excluir iframe | ✅ | só nos contratos associados | ❌ |
-| Visualizar painéis | todos | dos contratos associados | **só os painéis concedidos** |
+| Ação | ADMIN | DESENVOLVEDOR | GESTOR | VISUALIZADOR |
+|---|:--:|:--:|:--:|:--:|
+| Gerenciar usuários / permissões / logs | ✅ | ✅ (exceto contas ADMIN) | ❌ | ❌ |
+| Listar contratos | todos | todos | associados | associados |
+| Criar contrato | ✅ | ✅ | ✅ | ❌ |
+| Editar contrato | ✅ | ✅ | só associados | ❌ |
+| Excluir contrato | ✅ | ✅ | ❌ | ❌ |
+| Criar/editar/excluir iframe | ✅ | ✅ | só nos contratos associados | ❌ |
+| Visualizar painéis | todos | todos | dos contratos associados | **só os painéis concedidos** |
+
+**`FULL_ACCESS_ROLES` = `[ADMIN, DESENVOLVEDOR]`.** Tudo que decide *alcance de dados*
+(todos os contratos, contadores de usuário, telas de gestão) pergunta `hasFullAccess()`,
+não `role === ADMIN`. Os dois perfis enxergam o mesmo sistema.
+
+#### Proteção das contas ADMIN
+O que separa DESENVOLVEDOR de ADMIN é apenas **quem pode escrever numa conta ADMIN**.
+`assertCanManageUser(actor, target)` recusa (`403`) qualquer escrita de um DESENVOLVEDOR
+sobre um alvo ADMIN, e está em todas as rotas de escrita de `/users`: `PUT /users/:id`,
+`/contracts`, `/screens`, `/iframes` e `DELETE /users/:id`.
+
+`assertCanAssignRole(actor, role)` complementa: um DESENVOLVEDOR **não concede o perfil
+ADMIN** a ninguém, nem em `POST /users` / `POST /auth/register`, nem promovendo alguém em
+`PUT /users/:id`. Sem esse bloqueio a proteção acima seria contornável em dois passos —
+crio um ADMIN com senha conhecida, entro com ele, e então altero os demais
+administradores. Contas GESTOR, VISUALIZADOR e DESENVOLVEDOR ele gerencia normalmente.
 
 ### Camada 3 — Permissões de tela por conta (`allowed_screens`) — **menu** (frontend)
 Controla **quais telas aparecem no menu** de cada conta e o acesso direto por URL.
 **Substitui** o menu padrão do perfil.
 
-- **ADMIN** sempre acessa todas as telas (não pode ser restringido).
+- **ADMIN** e **DESENVOLVEDOR** sempre acessam todas as telas (não podem ser restringidos).
 - Telas **configuráveis** (por conta): `dashboard`, `contracts`, `iframes`, `viewer`.
-- Telas **exclusivas de ADMIN** (nunca liberadas a outros perfis): `users`, `permissions`, `logs`.
+- Telas **de gestão** (só ADMIN e DESENVOLVEDOR, nunca liberadas aos demais): `users`, `permissions`, `logs`.
 - Gerenciada na tela **Permissões** (matriz Usuários × Telas).
 - É controle de **navegação** (frontend). A autorização de **dados** continua na Camada 2.
 
-**Padrão na criação** (`defaultScreensForRole`): ADMIN recebe todas as telas; **GESTOR e
-VISUALIZADOR recebem apenas `viewer`**. As demais são concedidas depois, explicitamente,
+**Padrão na criação** (`defaultScreensForRole`): ADMIN e DESENVOLVEDOR recebem todas as
+telas; **GESTOR e VISUALIZADOR recebem apenas `viewer`**. As demais são concedidas depois, explicitamente,
 na tela de Permissões. É privilégio mínimo — antes, toda conta nova já nascia com as
 quatro telas configuráveis, de modo que o acesso só era removido por exceção.
 
 Aplicado em `POST /users` e em `POST /auth/register` (esta última criava a conta sem
 nenhuma tela, deixando o usuário sem destino após o login).
 
-**Rebaixamento de ADMIN** (`PUT /users/:id` mudando `role` de ADMIN para outro perfil):
-`allowed_screens` é redefinido para o padrão do novo perfil. Sem isso a conta manteria a
-lista completa de ADMIN gravada, e `effectiveScreens` a filtraria para as quatro telas
-configuráveis — contornando o padrão restrito. Trocas entre GESTOR e VISUALIZADOR
-preservam o que já havia sido concedido.
+**Rebaixamento de conta de acesso total** (`PUT /users/:id` mudando `role` de
+ADMIN/DESENVOLVEDOR para GESTOR/VISUALIZADOR): `allowed_screens` é redefinido para o
+padrão do novo perfil. Sem isso a conta manteria a lista completa gravada, e
+`effectiveScreens` a filtraria para as quatro telas configuráveis — contornando o padrão
+restrito. Trocas entre GESTOR e VISUALIZADOR, ou entre ADMIN e DESENVOLVEDOR, preservam o
+que já havia sido concedido.
 
 Contas já existentes não são alteradas: a regra incide na criação (e no rebaixamento).
 
@@ -217,7 +234,7 @@ Catálogo espelhado em `backend/src/utils/screens.ts` e `frontend/src/lib/screen
 Distribui, por conta, **quais painéis** um VISUALIZADOR vê na tela **Paineis**.
 
 - Modelo **explícito**: sem concessão, o VISUALIZADOR **não vê nenhum painel**.
-- Só se aplica ao VISUALIZADOR. GESTOR vê todos os painéis dos contratos associados; ADMIN vê tudo.
+- Só se aplica ao VISUALIZADOR. GESTOR vê todos os painéis dos contratos associados; ADMIN e DESENVOLVEDOR veem tudo.
 - Aplicado no **backend** (rotas do viewer e no resumo do dashboard).
 - Gerenciado na tela **Permissões** → seção "Acesso aos Paineis".
 
@@ -321,7 +338,7 @@ indicado como **público**. Erros seguem o formato:
 | POST | `/auth/change-password` | autenticado — body `{ "current_password", "new_password" }`; 204 em caso de sucesso |
 | GET | `/auth/me` | autenticado |
 
-### Usuários (ADMIN)
+### Usuários (ADMIN e DESENVOLVEDOR)
 | Método | Rota | Descrição |
 |---|---|---|
 | GET | `/users` | lista |
@@ -339,9 +356,9 @@ indicado como **público**. Erros seguem o formato:
 |---|---|---|
 | GET | `/contracts` (`?status=`, `?search=`) | autenticado (escopo por perfil) |
 | GET | `/contracts/:id` | autenticado com acesso |
-| POST | `/contracts` | ADMIN, GESTOR |
-| PUT | `/contracts/:id` | ADMIN, GESTOR (só associados) |
-| DELETE | `/contracts/:id` | ADMIN |
+| POST | `/contracts` | ADMIN, DESENVOLVEDOR, GESTOR |
+| PUT | `/contracts/:id` | ADMIN, DESENVOLVEDOR, GESTOR (só associados) |
+| DELETE | `/contracts/:id` | ADMIN, DESENVOLVEDOR |
 | GET | `/contracts/:id/iframes` | autenticado com acesso |
 
 **Contadores por perfil.** Os campos `iframes_count` e `users_count` do DTO de contrato
@@ -350,7 +367,7 @@ conta enxerga:
 
 | Perfil | `iframes_count` | `users_count` |
 |---|---|---|
-| ADMIN | todos os painéis | presente |
+| ADMIN / DESENVOLVEDOR | todos os painéis | presente |
 | GESTOR | todos os painéis | **omitido** — quantas contas usam o contrato é informação de gestão de acesso |
 | VISUALIZADOR | só os painéis **ativos e concedidos** a ele (Camada 4) | **omitido** |
 
@@ -363,9 +380,9 @@ quando a rota realmente o selecionou, para não devolver um `0` enganoso.
 |---|---|---|
 | GET | `/iframes` (`?contract_id=`, `?is_active=`, `?search=`) | autenticado (escopo por perfil) |
 | GET | `/iframes/:id` | autenticado com acesso |
-| POST | `/iframes` | ADMIN, GESTOR |
-| PUT | `/iframes/:id` | ADMIN, GESTOR |
-| DELETE | `/iframes/:id` | ADMIN, GESTOR |
+| POST | `/iframes` | ADMIN, DESENVOLVEDOR, GESTOR |
+| PUT | `/iframes/:id` | ADMIN, DESENVOLVEDOR, GESTOR |
+| DELETE | `/iframes/:id` | ADMIN, DESENVOLVEDOR, GESTOR |
 
 ### Viewer (tela "Paineis")
 | Método | Rota | Acesso |

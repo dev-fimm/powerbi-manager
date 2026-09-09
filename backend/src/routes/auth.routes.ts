@@ -4,7 +4,7 @@ import { Router } from 'express';
 import { env } from '../config/env';
 import { prisma } from '../lib/prisma';
 import { authenticate, signToken } from '../middlewares/auth';
-import { requireAdmin } from '../middlewares/rbac';
+import { assertCanAssignRole, requireFullAccess } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { AppError, ConflictError, UnauthorizedError } from '../utils/errors';
@@ -76,9 +76,12 @@ authRoutes.post(
 authRoutes.post(
   '/register',
   authenticate,
-  requireAdmin,
+  requireFullAccess,
   asyncHandler(async (req, res) => {
     const { name, email, password, role } = registerSchema.parse(req.body);
+
+    // DESENVOLVEDOR nao pode criar contas ADMIN (ver rbac.assertCanAssignRole).
+    assertCanAssignRole(req.user!, role);
 
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) throw new ConflictError('Ja existe um usuario com este e-mail.');

@@ -8,8 +8,8 @@ import {
   getAccessibleContractIds,
   getGrantedIframeIds,
   hasIframeLevelAccess,
-  isAdmin,
-  requireAdmin,
+  hasFullAccess,
+  requireFullAccess,
   requireManager,
 } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
@@ -40,7 +40,7 @@ contractRoutes.use(authenticate);
  *                     "8 paineis" num contrato onde so tinha acesso a 2.
  */
 async function countSelectForUser(user: Express.AuthenticatedUser) {
-  if (isAdmin(user)) {
+  if (hasFullAccess(user)) {
     return { iframes: true, users: true } as const;
   }
 
@@ -186,7 +186,7 @@ contractRoutes.put(
  */
 contractRoutes.delete(
   '/:id',
-  requireAdmin,
+  requireFullAccess,
   asyncHandler(async (req, res) => {
     const { id } = uuidParam.parse(req.params);
 
