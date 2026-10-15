@@ -1,4 +1,8 @@
 node_modules/
 dist/
 .env
+# Qualquer variante local (.env.bak, .env.local, .env.producao...) carrega
+# segredo igual ao .env. So o exemplo, que tem valores de mentira, fica fora.
+.env.*
+!.env.example
 *.log

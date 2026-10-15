@@ -22,7 +22,7 @@ export const MANAGEABLE_SCREENS = ['dashboard', 'contracts', 'iframes', 'viewer'
  * Telas de gestao: sempre visiveis para ADMIN e DESENVOLVEDOR, nunca para os
  * demais perfis.
  */
-export const ADMIN_SCREENS = ['users', 'permissions', 'logs'] as const;
+export const ADMIN_SCREENS = ['users', 'permissions', 'logs', 'monitoring'] as const;
 
 /** Tela de Paineis: unica liberada por padrao em contas GESTOR/VISUALIZADOR. */
 export const VIEWER_SCREEN = 'viewer';

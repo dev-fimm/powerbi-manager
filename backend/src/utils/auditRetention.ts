@@ -28,6 +28,21 @@ export async function purgeExpiredAuditLogs(): Promise<number> {
 
   const cutoff = new Date(Date.now() - days * ONE_DAY_MS);
 
+  /**
+   * access_sessions entra na MESMA politica: a tabela tambem guarda IP e
+   * user-agent, isto e, dado pessoal. Deixar as sessoes fora do expurgo
+   * esvaziaria a regra - bastaria olhar a outra tabela para reconstruir de
+   * onde cada conta acessou.
+   */
+  const purgedSessions = await prisma.accessSession.deleteMany({
+    where: { startedAt: { lt: cutoff } },
+  });
+
+  if (purgedSessions.count > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[auditoria] ${purgedSessions.count} sessao(oes) de uso vencida(s) removida(s).`);
+  }
+
   // Indice em audit_logs(created_at) ja existe no schema, entao o filtro
   // nao faz varredura completa da tabela.
   const { count } = await prisma.auditLog.deleteMany({

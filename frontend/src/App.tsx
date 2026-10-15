@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -9,6 +10,10 @@ import { LoginPage } from './pages/LoginPage';
 import { PermissionsPage } from './pages/PermissionsPage';
 import { UsersPage } from './pages/UsersPage';
 import { ViewerPage } from './pages/ViewerPage';
+
+const MonitoringPage = lazy(() =>
+  import('./pages/MonitoringPage').then((m) => ({ default: m.MonitoringPage })),
+);
 
 export function App() {
   return (
@@ -54,6 +59,20 @@ export function App() {
           element={
             <ProtectedRoute screen="logs">
               <LogsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="monitoramento"
+          element={
+            <ProtectedRoute screen="monitoring">
+              {/* Chunk separado: a biblioteca de graficos so e baixada por
+                  quem abre esta tela. */}
+              <Suspense
+                fallback={<p className="text-sm text-slate-500">Carregando monitoramento...</p>}
+              >
+                <MonitoringPage />
+              </Suspense>
             </ProtectedRoute>
           }
         />

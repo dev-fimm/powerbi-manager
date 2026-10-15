@@ -3,10 +3,11 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticate } from '../middlewares/auth';
 import { requireFullAccess } from '../middlewares/rbac';
+import { recordHeartbeat } from '../utils/accessSession';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { serializeAuditLog } from '../utils/serialize';
-import { listLogsQuerySchema, pageViewSchema } from '../validators/schemas';
+import { heartbeatSchema, listLogsQuerySchema, pageViewSchema } from '../validators/schemas';
 
 export const logRoutes = Router();
 
@@ -29,6 +30,24 @@ logRoutes.post(
       entityId: path,
       description: `Acessou a tela "${label ?? path}".`,
     });
+    res.status(204).send();
+  }),
+);
+
+/**
+ * POST /api/logs/heartbeat
+ * Sinal de "ainda estou aqui", enviado pela aba aberta a cada 30s. Serve para
+ * medir TEMPO de uso sem depender de o usuario clicar em "Sair" - ver
+ * utils/accessSession.ts.
+ *
+ * Disponivel para qualquer conta autenticada (todas navegam), por isso vem
+ * antes do guard de gestao. Responde 204: o front nao precisa de resposta.
+ */
+logRoutes.post(
+  '/heartbeat',
+  asyncHandler(async (req, res) => {
+    const { contract_id: contractId } = heartbeatSchema.parse(req.body ?? {});
+    await recordHeartbeat(req, req.user!.id, contractId);
     res.status(204).send();
   }),
 );

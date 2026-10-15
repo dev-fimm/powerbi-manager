@@ -179,6 +179,14 @@ export const pageViewSchema = z.object({
   label: z.string().trim().max(120).optional(),
 });
 
+/**
+ * Corpo do heartbeat. O contrato e opcional: so vem quando a aba esta numa
+ * tela de contrato, e e o que permite medir tempo por contrato.
+ */
+export const heartbeatSchema = z.object({
+  contract_id: z.string().uuid().optional(),
+});
+
 export const listLogsQuerySchema = z.object({
   action: z.string().trim().min(1).optional(),
   user_id: z.string().uuid('Identificador de usuario invalido.').optional(),
@@ -188,6 +196,28 @@ export const listLogsQuerySchema = z.object({
   to: z.string().trim().optional(),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+/**
+ * Query da tela de Monitoramento. Datas no formato yyyy-mm-dd; ausentes caem
+ * nos ultimos 30 dias (resolvido na rota, que conhece o fuso do servidor).
+ */
+export const monitoringQuerySchema = z.object({
+  from: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inicial invalida (use yyyy-mm-dd).')
+    .optional(),
+  to: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data final invalida (use yyyy-mm-dd).')
+    .optional(),
+  granularity: z.enum(['day', 'week']).default('day'),
+  /** Dias sem login para uma conta entrar na lista de inativas. */
+  inactive_days: z.coerce.number().int().min(1).max(365).default(30),
+  /** Restringe todas as metricas de uso a uma unica conta. */
+  user_id: z.string().uuid('Identificador de usuario invalido.').optional(),
 });
 
 export const listIframesQuerySchema = z.object({

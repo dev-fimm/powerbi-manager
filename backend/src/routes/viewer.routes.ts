@@ -10,6 +10,7 @@ import {
   hasFullAccess,
 } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
+import { AuditAction, recordLog } from '../utils/audit';
 import { verifyEmbedToken, signEmbedToken } from '../utils/embed';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '../utils/errors';
 import { serializeContract, serializeViewerIframe } from '../utils/serialize';
@@ -44,8 +45,36 @@ viewerRoutes.get(
       throw new ForbiddenError('Token nao corresponde ao painel solicitado.');
     }
 
-    const iframe = await prisma.iframe.findUnique({ where: { id } });
+    const iframe = await prisma.iframe.findUnique({
+      where: { id },
+      include: { contract: { select: { id: true, name: true } } },
+    });
     if (!iframe || !iframe.isActive) throw new NotFoundError('Painel nao encontrado.');
+
+    /**
+     * Registra o acesso AO PAINEL. E aqui - e so aqui - que se sabe qual
+     * painel foi efetivamente carregado: a tela de Paineis monta todos os
+     * iframes do contrato juntos, de modo que o PAGE_VIEW nao distingue um
+     * do outro. Alimenta a tela de Monitoramento.
+     *
+     * O autor vem do token (req.user nao existe nesta rota publica). Busca
+     * nome/e-mail para manter o mesmo snapshot do resto da auditoria, que
+     * preserva o historico se a conta for renomeada ou excluida.
+     */
+    const actor = payload.uid
+      ? await prisma.user.findUnique({
+          where: { id: payload.uid },
+          select: { id: true, name: true, email: true },
+        })
+      : null;
+
+    await recordLog(req, {
+      action: AuditAction.IFRAME_VIEW,
+      entity: 'Iframe',
+      entityId: iframe.id,
+      ...(actor ? { actor } : {}),
+      description: `Visualizou o painel "${iframe.title}" (contrato "${iframe.contract.name}").`,
+    });
 
     // Redireciona para a URL real do Power BI. A URL nao vai no JSON da API nem
     // no src do iframe; ela so aparece no header Location deste redirect
@@ -163,7 +192,9 @@ viewerRoutes.get(
     res.json({
       contract: serializeContract(contract),
       // Sem power_bi_url: cada painel recebe um token de embed de curta duracao.
-      iframes: iframes.map((i) => serializeViewerIframe(i, signEmbedToken(i.id))),
+      iframes: iframes.map((i) =>
+        serializeViewerIframe(i, signEmbedToken(i.id, req.user!.id)),
+      ),
     });
   }),
 );

@@ -93,3 +93,85 @@ export interface ViewerContractResponse {
   contract: Contract;
   iframes: ViewerIframe[];
 }
+
+// ---------------------------------------------------------- monitoramento
+/**
+ * Resposta de GET /api/monitoring/overview. A tela carrega tudo de uma vez
+ * porque varias metricas saem do mesmo conjunto de linhas de auditoria.
+ */
+export interface MonitoringOverview {
+  range: { from: string; to: string; granularity: 'day' | 'week' };
+  /** Conta a que as metricas estao restritas, ou null para todas. */
+  user_id: string | null;
+  /** true = o periodo bateu no teto de linhas lidas; os numeros estao incompletos. */
+  truncated: boolean;
+  inactive_days: number;
+  summary: {
+    /** Sessoes de uso medidas por heartbeat. */
+    sessions: number;
+    logins: number;
+    active_users: number;
+    iframe_views: number;
+    login_failures: number;
+    total_seconds: number;
+    avg_session_seconds: number;
+    /** Contas com sinal recente - quem esta no sistema agora. */
+    online_now: number;
+  };
+  timeline: { period: string; sessions: number; iframe_views: number }[];
+  top_iframes: {
+    iframe_id: string;
+    title: string;
+    contract_name: string | null;
+    client_name: string | null;
+    is_active: boolean | null;
+    views: number;
+    viewers: number;
+  }[];
+  never_accessed: {
+    iframe_id: string;
+    title: string;
+    contract_name: string;
+    client_name: string;
+  }[];
+  by_user: {
+    user_id: string;
+    name: string;
+    email: string | null;
+    role: Role | null;
+    sessions: number;
+    seconds: number;
+    iframe_views: number;
+    last_access: string | null;
+    online: boolean;
+  }[];
+  last_accesses: {
+    user_id: string;
+    name: string;
+    email: string | null;
+    started_at: string;
+    last_seen_at: string;
+    duration_seconds: number;
+    /** true = sinal recente; a sessao ainda esta acontecendo. */
+    online: boolean;
+    ip_address: string | null;
+  }[];
+  by_contract: {
+    contract_id: string;
+    name: string;
+    client_name: string | null;
+    iframe_views: number;
+    seconds: number;
+    visitors: number;
+  }[];
+  /** Matriz [dia da semana 0..6][hora 0..23] com a contagem de eventos. */
+  heatmap: number[][];
+  login_failures: { identifier: string | null; attempts: number }[];
+  inactive_users: {
+    user_id: string;
+    name: string;
+    email: string;
+    role: Role;
+    last_login: string | null;
+  }[];
+}

@@ -25,6 +25,7 @@ export const ADMIN_SCREENS: ScreenDef[] = [
   { key: 'users', label: 'Usuarios', path: '/users' },
   { key: 'permissions', label: 'Permissoes', path: '/permissions' },
   { key: 'logs', label: 'Logs', path: '/logs' },
+  { key: 'monitoring', label: 'Monitoramento', path: '/monitoramento' },
 ];
 
 /** Todas as telas, na ordem de exibicao do menu. */
@@ -33,6 +34,7 @@ export const ALL_SCREENS: ScreenDef[] = [
   ...ADMIN_SCREENS.slice(0, 2), // Usuarios, Permissoes
   ...MANAGEABLE_SCREENS.slice(1), // Contratos, Iframes, Viewer
   ADMIN_SCREENS[2], // Logs
+  ADMIN_SCREENS[3], // Monitoramento
 ];
 
 /**

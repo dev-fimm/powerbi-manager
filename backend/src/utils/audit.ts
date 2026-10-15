@@ -19,6 +19,13 @@ export const AuditAction = {
   LOGIN_FAILED: 'LOGIN_FAILED',
   LOGOUT: 'LOGOUT',
   PAGE_VIEW: 'PAGE_VIEW',
+  /**
+   * Um painel foi carregado no navegador (rota de embed). E o unico sinal
+   * de acesso POR PAINEL que existe: a tela de Paineis renderiza todos os
+   * iframes do contrato de uma vez, entao o PAGE_VIEW so diz qual contrato
+   * foi aberto. Consumido pela tela de Monitoramento.
+   */
+  IFRAME_VIEW: 'IFRAME_VIEW',
   /** O proprio usuario trocou a senha informando a senha atual. */
   PASSWORD_CHANGE: 'PASSWORD_CHANGE',
   /** Um ADMIN redefiniu a senha de outra conta. */

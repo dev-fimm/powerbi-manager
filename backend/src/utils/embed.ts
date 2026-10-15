@@ -18,15 +18,24 @@ import { env } from '../config/env';
 interface EmbedPayload {
   /** id do iframe autorizado. */
   iid: string;
+  /**
+   * id de quem pediu o token. A rota de embed e publica (um <iframe> nao
+   * manda Authorization), entao sem isto o acesso ao painel nao pode ser
+   * atribuido a ninguem - e "quantidade de acesso por usuario" fica sem
+   * fonte. Tokens antigos nao tem o campo; o registro so perde o autor.
+   */
+  uid?: string;
   purpose: 'embed';
 }
 
 const EMBED_TTL = '1h';
 
-export function signEmbedToken(iframeId: string): string {
-  return jwt.sign({ iid: iframeId, purpose: 'embed' } satisfies EmbedPayload, env.jwtSecret, {
-    expiresIn: EMBED_TTL,
-  });
+export function signEmbedToken(iframeId: string, userId?: string): string {
+  return jwt.sign(
+    { iid: iframeId, uid: userId, purpose: 'embed' } satisfies EmbedPayload,
+    env.jwtSecret,
+    { expiresIn: EMBED_TTL },
+  );
 }
 
 export function verifyEmbedToken(token: string): EmbedPayload {

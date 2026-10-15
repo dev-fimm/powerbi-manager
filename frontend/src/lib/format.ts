@@ -48,6 +48,7 @@ export const LOG_ACTION_LABEL: Record<string, string> = {
   LOGIN_FAILED: 'Falha de login',
   LOGOUT: 'Logout',
   PAGE_VIEW: 'Tela acessada',
+  IFRAME_VIEW: 'Painel visualizado',
   PASSWORD_CHANGE: 'Senha alterada',
   PASSWORD_RESET: 'Senha redefinida pelo admin',
   AUDIT_PURGE: 'Expurgo de logs',
@@ -73,6 +74,7 @@ export const LOG_ACTION_TONE: Record<string, LogTone> = {
   LOGOUT: 'slate',
   LOGIN_FAILED: 'rose',
   PAGE_VIEW: 'slate',
+  IFRAME_VIEW: 'brand',
   PASSWORD_CHANGE: 'amber',
   PASSWORD_RESET: 'rose',
   AUDIT_PURGE: 'slate',
@@ -98,6 +100,7 @@ export const SCREEN_LABEL: Record<string, string> = {
   '/contracts': 'Contratos',
   '/iframes': 'Iframes',
   '/paineis': 'Paineis',
+  '/monitoramento': 'Monitoramento',
 };
 
 /** Resolve o nome da tela a partir do pathname (trata rotas dinamicas). */

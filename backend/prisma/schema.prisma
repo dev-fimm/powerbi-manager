@@ -50,6 +50,10 @@ model User {
   // o viewer desse perfil so exibe os iframes explicitamente concedidos aqui.
   iframeGrants UserIframe[]
 
+  // Sessoes de uso medidas por heartbeat (tela de Monitoramento). Ao excluir
+  // a conta as sessoes vao junto: sem o usuario elas nao medem nada.
+  accessSessions AccessSession[]
+
   @@map("users")
 }
 
@@ -67,6 +71,9 @@ model Contract {
   // Cascade delete: excluir o contrato remove seus iframes e suas associacoes.
   iframes Iframe[]
   users   UserContract[]
+
+  // Tempo medido de permanencia na tela deste contrato.
+  usage SessionContractUsage[]
 
   @@index([status])
   @@map("contracts")
@@ -111,6 +118,65 @@ model UserIframe {
   @@index([userId])
   @@index([iframeId])
   @@map("user_iframes")
+}
+
+// ============================================================
+// Sessao de uso - mede TEMPO de permanencia no sistema.
+//
+// Por que nao sai do audit_logs: la so existem eventos pontuais, e o fim de
+// uma sessao dependia do LOGOUT, que so e gravado quando a pessoa clica em
+// "Sair". Quem fecha a aba - a maioria - nunca gerava o evento.
+//
+// Aqui o modelo e invertido: a aba aberta manda um sinal periodico e o
+// servidor so adianta last_seen_at. A duracao e last_seen_at - started_at.
+// Se o navegador fecha, trava ou a maquina hiberna, o sinal para de chegar e
+// a duracao congela sozinha - nao existe sessao "aberta para sempre".
+// ============================================================
+model AccessSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  startedAt  DateTime @default(now()) @map("started_at")
+  // Ultimo sinal recebido. Avanca a cada heartbeat enquanto a aba esta aberta.
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent") @db.Text
+  // Contrato que a aba estava exibindo no sinal ANTERIOR. O intervalo entre
+  // dois sinais pertence a onde a pessoa estava DURANTE o intervalo, nao a
+  // onde ela chegou - por isso o contrato anterior, e nao o atual.
+  lastContractId String? @map("last_contract_id") @db.Uuid
+
+  user  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usage SessionContractUsage[]
+
+  @@index([userId])
+  // A consulta quente e "sessao aberta desta conta" e "sessoes do periodo".
+  @@index([userId, lastSeenAt])
+  @@index([startedAt])
+  @@map("access_sessions")
+}
+
+// ============================================================
+// Tempo MEDIDO por contrato dentro de uma sessao.
+//
+// Cada sinal de heartbeat soma aqui o intervalo desde o sinal anterior, no
+// contrato em que a aba estava. E medicao, nao estimativa: so entra tempo
+// que ficou entre dois sinais efetivamente recebidos.
+//
+// A linha e por (sessao, contrato), entao o expurgo das sessoes leva o tempo
+// junto (cascade) e o recorte por periodo sai pelo started_at da sessao.
+// ============================================================
+model SessionContractUsage {
+  id         String @id @default(uuid()) @db.Uuid
+  sessionId  String @map("session_id") @db.Uuid
+  contractId String @map("contract_id") @db.Uuid
+  seconds    Int    @default(0)
+
+  session  AccessSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  contract Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, contractId])
+  @@index([contractId])
+  @@map("session_contract_usage")
 }
 
 // ============================================================

@@ -4,6 +4,7 @@ import { contractRoutes } from './contracts.routes';
 import { dashboardRoutes } from './dashboard.routes';
 import { iframeRoutes } from './iframes.routes';
 import { logRoutes } from './logs.routes';
+import { monitoringRoutes } from './monitoring.routes';
 import { userRoutes } from './users.routes';
 import { viewerRoutes } from './viewer.routes';
 
@@ -20,3 +21,4 @@ routes.use('/iframes', iframeRoutes);
 routes.use('/viewer', viewerRoutes);
 routes.use('/dashboard', dashboardRoutes);
 routes.use('/logs', logRoutes);
+routes.use('/monitoring', monitoringRoutes);
