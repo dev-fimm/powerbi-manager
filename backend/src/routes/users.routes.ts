@@ -13,6 +13,7 @@ import {
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { AppError, ConflictError, NotFoundError, UnauthorizedError } from '../utils/errors';
+import { unlockAccount } from '../utils/loginThrottle';
 import { checkPasswordPolicy } from '../utils/password';
 import {
   defaultScreensForRole,
@@ -221,6 +222,14 @@ userRoutes.put(
     // Reset de senha vira um evento proprio na auditoria: e o tipo de acao
     // que precisa ser encontravel sem depender de ler descricoes.
     if (data.password) {
+      /**
+       * Redefinir a senha libera a conta do bloqueio por forca bruta. E o
+       * desbloqueio manual previsto para o ultimo degrau do backoff: sem
+       * isto, uma conta nesse estado ficaria presa sem saida pela aplicacao.
+       * Usa o e-mail que ficou gravado, nao o anterior.
+       */
+      await unlockAccount(user.email);
+
       await recordLog(req, {
         action: AuditAction.PASSWORD_RESET,
         entity: 'User',

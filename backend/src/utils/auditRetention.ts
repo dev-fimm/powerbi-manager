@@ -38,6 +38,23 @@ export async function purgeExpiredAuditLogs(): Promise<number> {
     where: { startedAt: { lt: cutoff } },
   });
 
+  /**
+   * Contadores de login vencidos tambem saem: a tabela guarda endereco IP, e
+   * um contador que ja passou da janela e do bloqueio nao serve para mais
+   * nada. Usa a mesma data de corte das demais tabelas.
+   */
+  const purgedThrottle = await prisma.loginThrottle.deleteMany({
+    where: {
+      updatedAt: { lt: cutoff },
+      OR: [{ blockedUntil: null }, { blockedUntil: { lt: new Date() } }],
+    },
+  });
+
+  if (purgedThrottle.count > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[auditoria] ${purgedThrottle.count} contador(es) de login vencido(s) removido(s).`);
+  }
+
   if (purgedSessions.count > 0) {
     // eslint-disable-next-line no-console
     console.log(`[auditoria] ${purgedSessions.count} sessao(oes) de uso vencida(s) removida(s).`);

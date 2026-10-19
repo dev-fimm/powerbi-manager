@@ -25,6 +25,7 @@ Sistema web para gerenciar **usuários**, **contratos** e os **iframes públicos
 - [Controle de acesso avançado](#controle-de-acesso-avançado)
 - [Segurança do embed](#segurança-do-embed)
 - [Auditoria (logs)](#auditoria-logs)
+- [Monitoramento de uso](#monitoramento-de-uso)
 - [Endpoints da API](#endpoints-da-api)
 - [Como obter a URL pública do Power BI](#como-obter-a-url-pública-do-power-bi)
 - [Docker](#docker)
@@ -47,12 +48,14 @@ powerbi-manager/
 │   │   │   ├── auth.ts          # autenticação JWT
 │   │   │   ├── rbac.ts          # controle de acesso por role
 │   │   │   └── error.ts         # tratamento global de erros
-│   │   ├── routes/              # auth, users, contracts, iframes, viewer, dashboard, logs
+│   │   ├── routes/              # auth, users, contracts, iframes, viewer, dashboard, logs, monitoring
 │   │   ├── utils/
 │   │   │   ├── powerbi.ts       # validação da URL do Power BI
 │   │   │   ├── screens.ts       # catálogo de telas (permissões por conta)
 │   │   │   ├── embed.ts         # token de embed (oculta a URL do Power BI)
 │   │   │   ├── audit.ts         # registro de auditoria
+│   │   │   ├── accessSession.ts # sessões de uso medidas por heartbeat
+│   │   │   ├── loginThrottle.ts # proteção contra força bruta no login
 │   │   │   └── serialize.ts     # DTOs (camelCase → snake_case)
 │   │   ├── validators/schemas.ts# validação de payloads (zod)
 │   │   ├── app.ts
@@ -63,8 +66,8 @@ powerbi-manager/
     ├── src/
     │   ├── components/          # Layout, ProtectedRoute, UI (Button, Modal, Table, Card, Field)
     │   ├── contexts/            # AuthContext, ToastContext
-    │   ├── lib/                 # api.ts (HTTP+JWT), format.ts, screens.ts
-    │   ├── pages/               # Login, Dashboard, Users, Contracts, Iframes, Paineis, Permissions, Logs
+    │   ├── lib/                 # api.ts (HTTP+JWT), format.ts, screens.ts, charts.ts, heartbeat.ts
+    │   ├── pages/               # Login, Dashboard, Users, Contracts, Iframes, Paineis, Permissions, Logs, Monitoramento
     │   └── types/
     ├── Dockerfile
     ├── nginx.conf
@@ -208,6 +211,49 @@ A geração usa `crypto.getRandomValues` (CSPRNG do navegador), **não** `Math.r
 
 **Trocar a própria senha:** botão **Alterar senha** no topo, disponível para qualquer perfil. Exige a senha atual, mesmo com a sessão já autenticada — é o que impede que um token roubado vire posse permanente da conta.
 
+### Proteção contra força bruta
+
+O login combina **contagem de tentativas** com **bloqueio temporário**, em dois eixos independentes — qualquer um deles estourando já barra a tentativa:
+
+| Eixo | O que contém | Padrão |
+|---|---|---|
+| **Conta** (e-mail digitado) | martelar a senha de um usuário específico | 3 erros / 60s → bloqueio |
+| **IP de origem** | varrer muitas contas a partir do mesmo lugar | 15 erros / 60s → bloqueio |
+
+O limite por IP é **separado e maior de propósito**. Num escritório várias pessoas saem pelo mesmo IP (NAT); aplicar o limite da conta também ao IP faria três erros de senha de três pessoas diferentes derrubarem o login do prédio inteiro.
+
+#### Backoff exponencial
+
+Cada novo bloqueio do **mesmo alvo** dura mais que o anterior:
+
+| Bloqueio | Duração padrão |
+|---|---|
+| 1º | 1 minuto |
+| 2º | 5 minutos |
+| 3º | 15 minutos |
+| 4º | 1 hora |
+| 5º em diante | 24 horas (ou sem prazo, com `LOGIN_THROTTLE_MANUAL_UNLOCK=true`) |
+
+O **nível sobrevive ao fim do bloqueio** — este é o ponto. Se zerasse junto, o atacante levaria sempre a punição mínima: bastaria esperar o minuto passar e recomeçar. O nível só volta a zero em duas situações: **login bem-sucedido**, ou **24h sem nenhuma tentativa falha** (`LOGIN_THROTTLE_LEVEL_RESET_SECONDS`). O corte usa a última *falha*, não o fim do bloqueio: quem erra de novo no dia seguinte continua reincidente.
+
+O erro honesto de senha custa um minuto; insistir é que fica caro.
+
+**Bloqueio sem prazo.** Com `LOGIN_THROTTLE_MANUAL_UNLOCK=true`, o último degrau deixa de ter validade e a resposta vem sem `Retry-After`, com a mensagem `Conta bloqueada por excesso de tentativas. Contate o administrador.` O caminho de volta é **redefinir a senha** — pelo administrador na tela de Usuários, ou pelo próprio usuário em "Alterar senha". Os dois limpam o contador.
+
+#### Demais regras
+
+- Durante o bloqueio, **nem a senha correta entra** — a verificação acontece antes de conferir a credencial. A resposta é `429` com `Retry-After` e o tempo restante.
+- Um login bem-sucedido **zera contador e nível** daquela conta e daquele IP; os de outras contas seguem intactos.
+- A janela de contagem é deslizante por reinício: passados 60s sem nova falha, o contador recomeça do zero. Ela é independente do nível, que vive bem mais.
+- A mensagem **não informa o nível** nem qual eixo bloqueou — dizer "3º bloqueio" entregaria ao atacante um retorno sobre o próprio progresso.
+- Cada bloqueio vira um evento `LOGIN_BLOCKED` na auditoria, com conta, IP e horário. **A senha nunca é registrada.**
+
+O contador vive no banco (`login_throttle`), e não em memória: sobrevive a um restart da API — senão bastaria derrubar o processo para zerar um bloqueio — e o incremento é serializado por *advisory lock* por alvo, de modo que tentativas paralelas não "perdem" falhas.
+
+**Mensagens genéricas.** E-mail inexistente, senha errada e conta inativa devolvem exatamente a mesma resposta: `Usuario ou senha invalidos.` A de conta inativa era específica e, com isso, confirmava que aquele e-mail existia. O motivo real continua na auditoria, onde só o administrador lê. O tempo de resposta também é equalizado: quando o e-mail não existe, a API compara a senha contra um hash descartável, para a demora não denunciar quais contas existem.
+
+---
+
 **Redefinir a senha de uma conta de gestão (ADMIN ou DESENVOLVEDOR):** exige que quem está executando confirme a própria senha. Sem isso, uma conta privilegiada assumiria a outra em silêncio e passaria a agir na auditoria com o nome dela. Contas GESTOR e VISUALIZADOR seguem no fluxo normal de reset. (Um DESENVOLVEDOR não chega a esse ponto com um alvo ADMIN: a alteração é recusada antes.)
 
 > Ainda **não** existe "esqueci minha senha" por e-mail: isso depende de infraestrutura de envio (SMTP) que o projeto não tem. Hoje a recuperação é feita por um ADMIN, pela tela de Usuários.
@@ -229,6 +275,12 @@ Definida em [`backend/src/utils/password.ts`](backend/src/utils/password.ts) e e
 | `PORT` | não | Porta da API (padrão `3333`) |
 | `NODE_ENV` | não | `development` ou `production` |
 | `CORS_ORIGIN` | não | Origens permitidas, separadas por vírgula, ou `*` |
+| `LOGIN_THROTTLE_MAX_ATTEMPTS` | não | Erros de senha tolerados por conta dentro da janela (padrão `3`) |
+| `LOGIN_THROTTLE_WINDOW_SECONDS` | não | Janela de contagem das falhas, em segundos (padrão `60`) |
+| `LOGIN_THROTTLE_BLOCK_STEPS` | não | Duração de cada bloqueio em segundos, separada por vírgula — backoff exponencial (padrão `60,300,900,3600,86400`) |
+| `LOGIN_THROTTLE_LEVEL_RESET_SECONDS` | não | Tempo sem nenhuma falha para zerar o nível de bloqueio (padrão `86400`) |
+| `LOGIN_THROTTLE_MANUAL_UNLOCK` | não | `true` faz o último degrau exigir liberação manual, sem prazo (padrão `false`) |
+| `LOGIN_THROTTLE_IP_MAX_ATTEMPTS` | não | Limite por IP. Maior que o da conta de propósito — ver [Proteção contra força bruta](#proteção-contra-força-bruta) (padrão `15`) |
 | `AUDIT_LOG_RETENTION_DAYS` | não | Dias de retenção dos logs de auditoria (padrão `365`; `0` desliga o expurgo) |
 | `SEED_ADMIN_*` | não | Nome, e-mail e senha do admin criado pelo seed |
 
@@ -292,7 +344,7 @@ Define **quais telas** aparecem no menu de cada conta e o acesso direto por URL.
 
 - **ADMIN** e **DESENVOLVEDOR** sempre acessam todas as telas (não podem ser restringidos).
 - Telas **configuráveis**: `Dashboard`, `Contratos`, `Iframes`, `Paineis`.
-- Telas **de gestão** (só ADMIN e DESENVOLVEDOR, nunca liberadas aos demais perfis): `Usuários`, `Permissões`, `Logs`.
+- Telas **de gestão** (só ADMIN e DESENVOLVEDOR, nunca liberadas aos demais perfis): `Usuários`, `Permissões`, `Logs`, `Monitoramento`.
 - É controle de **navegação** (frontend). A autorização de **dados** continua sendo por perfil no backend.
 
 **Telas iniciais de uma conta nova:** GESTOR e VISUALIZADOR são criados com acesso **apenas a `Paineis`**. `Dashboard`, `Contratos` e `Iframes` são liberados depois, conta a conta, aqui em Permissões.
@@ -327,7 +379,7 @@ Para que o link público do Power BI (`?r=...`) não fique exposto na interface:
 
 Todas as ações relevantes são registradas na tabela `audit_logs` e consultadas na tela **Logs** (só ADMIN), com filtros (ação, usuário, texto, datas) e paginação.
 
-Ações registradas: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `PAGE_VIEW` (tela acessada), `PASSWORD_CHANGE` (troca pelo próprio usuário), `PASSWORD_RESET` (redefinição por um ADMIN), `AUDIT_PURGE` (expurgo automático), e as operações de `USER_*`, `CONTRACT_*` e `IFRAME_*` (criar/editar/excluir), além de `USER_CONTRACTS`, `USER_SCREENS` e `USER_IFRAMES`.
+Ações registradas: `LOGIN`, `LOGIN_FAILED`, `LOGIN_BLOCKED` (bloqueio por força bruta), `LOGOUT`, `PAGE_VIEW` (tela acessada), `IFRAME_VIEW` (painel aberto no viewer), `PASSWORD_CHANGE` (troca pelo próprio usuário), `PASSWORD_RESET` (redefinição por um ADMIN), `AUDIT_PURGE` (expurgo automático), e as operações de `USER_*`, `CONTRACT_*` e `IFRAME_*` (criar/editar/excluir), além de `USER_CONTRACTS`, `USER_SCREENS` e `USER_IFRAMES`.
 
 ### Retenção
 
@@ -335,7 +387,44 @@ Os logs guardam **IP e user-agent** — dado pessoal. Guardá-los indefinidament
 
 Um job apaga os registros mais antigos que `AUDIT_LOG_RETENTION_DAYS` (padrão **365 dias**). Ele roda na inicialização da API e depois a cada 24 h. Use `AUDIT_LOG_RETENTION_DAYS=0` para desligar, por exemplo quando houver exigência contratual de guarda.
 
+O mesmo corte vale para as **sessões de uso** (`access_sessions`) e para os **contadores de login** vencidos (`login_throttle`): as duas tabelas também guardam IP, e deixar uma de fora esvaziaria a regra — bastaria olhar a outra para reconstruir de onde cada conta acessou.
+
 O próprio expurgo fica registrado como `AUDIT_PURGE` — sem isso, um buraco no histórico seria indistinguível de adulteração.
+
+---
+
+## Monitoramento de uso
+
+Tela **Monitoramento** (só ADMIN e DESENVOLVEDOR), em `/monitoramento`. Mede painéis
+mais acessados, acessos e **tempo** por usuário (por dia ou semana), últimos acessos,
+uso por contrato, heatmap de dia × hora, painéis nunca acessados, contas inativas e
+falhas de login. Os filtros são período, granularidade e usuário; todas as tabelas são
+paginadas.
+
+Os dados vêm **do próprio banco** — não há dado de exemplo nessa tela. Período em
+branco significa que ainda não houve uso naquele intervalo.
+
+### Como o tempo é medido
+
+Medir por `LOGIN` → `LOGOUT` não funciona: **as pessoas fecham a aba**. Nos dados reais
+deste sistema, cerca de 90% das sessões não tinham `LOGOUT` nenhum.
+
+A medição não depende de nenhum evento de saída. Enquanto a aba está **visível**, o
+front envia um sinal (*heartbeat*) a cada **30 s**, e a duração da sessão é
+`último sinal − primeiro sinal`. Daí saem três propriedades:
+
+- **Nada fica "aberto para sempre".** Fechou a aba, travou o navegador, hibernou a máquina: o sinal para e o tempo congela.
+- **Várias abas não contam em dobro.** A sessão é da **conta**, não da aba — abas paralelas só renovam o mesmo sinal.
+- **Tempo ocioso em segundo plano não entra**, porque o front não sinaliza com a aba escondida.
+
+Um silêncio acima de **5 min** faz o próximo sinal abrir uma **sessão nova** (saiu e
+voltou). E um intervalo entre dois sinais maior que **60 s** **não é atribuído** a
+ninguém: o heartbeat só confirma o que viu, e chutar o resto transformaria medição em
+estimativa. O mesmo intervalo é somado ao contrato que estava na tela, o que dá o tempo
+por contrato.
+
+Detalhes de implementação, constantes e o teto de leitura das consultas estão na
+[documentação técnica](docs/DOCUMENTATION.md#8-monitoramento-de-uso-medição-de-tempo).
 
 ---
 
@@ -400,7 +489,15 @@ Todas as rotas usam o prefixo `/api` e exigem o header `Authorization: Bearer <t
 | Método | Rota | Acesso |
 |---|---|---|
 | POST | `/api/logs/page-view` — body `{ "path": "", "label": "" }` | autenticado (qualquer perfil) |
+| POST | `/api/logs/heartbeat` — body `{ "contract_id"? }` | autenticado (sinal de sessão, a cada 30 s) |
 | GET | `/api/logs` (filtros: `?action=`, `?user_id=`, `?search=`, `?from=`, `?to=`, `?page=`, `?page_size=`) | ADMIN |
+
+### Monitoramento
+| Método | Rota | Acesso |
+|---|---|---|
+| GET | `/api/monitoring/overview` (filtros: `?from=`, `?to=`, `?granularity=day\|week`, `?user_id=`, `?inactive_days=`) | ADMIN e DESENVOLVEDOR |
+
+Datas em `yyyy-mm-dd`; sem filtro, o período é os **últimos 30 dias**. A resposta traz todos os blocos da tela de uma vez.
 
 ### Exemplo
 

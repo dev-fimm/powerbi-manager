@@ -19,6 +19,14 @@ enum Role {
   VISUALIZADOR
 }
 
+// Alvo de um contador de tentativas de login. A protecao age nos dois
+// eixos: a conta (impede forca bruta contra uma senha) e o IP (impede que um
+// atacante varra muitas contas da mesma origem).
+enum ThrottleScope {
+  ACCOUNT
+  IP
+}
+
 enum ContractStatus {
   ATIVO
   SUSPENSO
@@ -177,6 +185,51 @@ model SessionContractUsage {
   @@unique([sessionId, contractId])
   @@index([contractId])
   @@map("session_contract_usage")
+}
+
+// ============================================================
+// Contador de tentativas de login - protecao contra forca bruta.
+//
+// Uma linha por alvo (conta ou IP). O contador vive dentro de uma JANELA:
+// passada a janela sem nova falha, ele recomeca do zero. Estourado o limite
+// dentro da janela, blocked_until marca o fim do bloqueio.
+//
+// Mora no banco, e nao em memoria, por dois motivos: o contador sobrevive a
+// um restart da API (senao bastaria derrubar o processo para zerar o
+// bloqueio) e o incremento pode ser serializado de verdade, sem depender do
+// processo ser unico.
+// ============================================================
+model LoginThrottle {
+  id    String        @id @default(uuid()) @db.Uuid
+  scope ThrottleScope
+  // E-mail normalizado (ACCOUNT) ou endereco de origem (IP).
+  key   String
+
+  failures        Int       @default(0)
+  windowStartedAt DateTime  @default(now()) @map("window_started_at")
+  // Null = sem bloqueio. No passado = bloqueio ja expirado.
+  blockedUntil    DateTime? @map("blocked_until")
+
+  // Quantas vezes este alvo ja foi bloqueado. Define a duracao do proximo
+  // bloqueio (backoff exponencial) e SOBREVIVE ao fim do bloqueio - senao
+  // o atacante levaria sempre a punicao minima, bastando esperar.
+  blockLevel Int @default(0) @map("block_level")
+
+  // Quando o nivel exige liberacao manual (ultimo degrau, conforme
+  // configuracao). Nesse caso blocked_until fica nulo: nao ha prazo.
+  requiresManualUnlock Boolean @default(false) @map("requires_manual_unlock")
+
+  // Ultima falha registrada. Base para zerar o nivel apos um periodo longo
+  // sem nenhuma tentativa - nao da para usar updated_at, que mudaria em
+  // qualquer escrita futura nesta linha.
+  lastFailureAt DateTime @default(now()) @map("last_failure_at")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([scope, key])
+  // O expurgo varre por aqui (ver utils/auditRetention.ts).
+  @@index([updatedAt])
+  @@map("login_throttle")
 }
 
 // ============================================================

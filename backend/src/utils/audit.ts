@@ -17,6 +17,8 @@ import { prisma } from '../lib/prisma';
 export const AuditAction = {
   LOGIN: 'LOGIN',
   LOGIN_FAILED: 'LOGIN_FAILED',
+  /** Conta ou IP bloqueado por excesso de tentativas (forca bruta). */
+  LOGIN_BLOCKED: 'LOGIN_BLOCKED',
   LOGOUT: 'LOGOUT',
   PAGE_VIEW: 'PAGE_VIEW',
   /**

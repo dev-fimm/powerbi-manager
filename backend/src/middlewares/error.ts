@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { isProduction } from '../config/env';
-import { AppError } from '../utils/errors';
+import { AppError, TooManyRequestsError } from '../utils/errors';
 
 export function notFoundHandler(req: Request, res: Response): void {
   res.status(404).json({ message: `Rota nao encontrada: ${req.method} ${req.originalUrl}` });
@@ -30,6 +30,13 @@ export function errorHandler(
   }
 
   if (err instanceof AppError) {
+    // Retry-After e a forma padrao de dizer "tente de novo em N segundos";
+    // navegadores e clientes HTTP sabem le-lo sem interpretar o corpo.
+    // Sem prazo definido (liberacao manual) nao existe Retry-After honesto:
+    // informar um numero qualquer faria o cliente tentar de novo a toa.
+    if (err instanceof TooManyRequestsError && err.retryAfterSeconds !== null) {
+      res.setHeader('Retry-After', String(err.retryAfterSeconds));
+    }
     res.status(err.statusCode).json({
       message: err.message,
       ...(err.details ? { errors: err.details } : {}),

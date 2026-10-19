@@ -46,6 +46,7 @@ export const STATUS_LABEL: Record<ContractStatus, string> = {
 export const LOG_ACTION_LABEL: Record<string, string> = {
   LOGIN: 'Login',
   LOGIN_FAILED: 'Falha de login',
+  LOGIN_BLOCKED: 'Login bloqueado',
   LOGOUT: 'Logout',
   PAGE_VIEW: 'Tela acessada',
   IFRAME_VIEW: 'Painel visualizado',
@@ -73,6 +74,7 @@ export const LOG_ACTION_TONE: Record<string, LogTone> = {
   LOGIN: 'emerald',
   LOGOUT: 'slate',
   LOGIN_FAILED: 'rose',
+  LOGIN_BLOCKED: 'rose',
   PAGE_VIEW: 'slate',
   IFRAME_VIEW: 'brand',
   PASSWORD_CHANGE: 'amber',

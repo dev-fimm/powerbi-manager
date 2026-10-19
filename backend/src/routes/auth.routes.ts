@@ -8,6 +8,14 @@ import { assertCanAssignRole, requireFullAccess } from '../middlewares/rbac';
 import { asyncHandler } from '../utils/async';
 import { AuditAction, recordLog } from '../utils/audit';
 import { AppError, ConflictError, UnauthorizedError } from '../utils/errors';
+import {
+  assertNotBlocked,
+  blockedError,
+  clearAttempts,
+  clientIp,
+  registerFailedAttempt,
+  unlockAccount,
+} from '../utils/loginThrottle';
 import { checkPasswordPolicy } from '../utils/password';
 import { defaultScreensForRole } from '../utils/screens';
 import { serializeUser } from '../utils/serialize';
@@ -16,56 +24,87 @@ import { changePasswordSchema, loginSchema, registerSchema } from '../validators
 export const authRoutes = Router();
 
 /**
+ * Hash descartavel usado quando o e-mail nao existe.
+ *
+ * Sem ele, a resposta para e-mail inexistente volta na hora e a de senha
+ * errada demora o tempo do bcrypt - diferenca de tempo suficiente para
+ * descobrir quais e-mails estao cadastrados, mesmo com a mensagem identica.
+ * Comparar contra um hash qualquer iguala o custo das duas respostas.
+ */
+const DUMMY_HASH = bcrypt.hashSync('senha-que-nunca-sera-usada', env.bcryptSaltRounds);
+
+/** Mensagem unica de credencial recusada (ver bloco de seguranca abaixo). */
+const INVALID_CREDENTIALS = 'Usuario ou senha invalidos.';
+
+/**
  * POST /api/auth/login
  * UNICA rota publica da API (regra 1).
  *
- * Observacao de seguranca: a mensagem de erro e a mesma para e-mail
- * inexistente e senha errada, para nao revelar quais e-mails existem.
+ * ============================================================
+ * SEGURANCA DESTE ENDPOINT
+ * ============================================================
+ * - Protecao contra forca bruta (utils/loginThrottle.ts): o bloqueio e
+ *   checado ANTES da senha, entao durante o bloqueio nem a credencial certa
+ *   entra.
+ * - Mensagem unica para e-mail inexistente, senha errada E conta inativa.
+ *   As duas primeiras ja eram iguais; a de conta inativa dizia "usuario
+ *   inativo" e, com isso, confirmava que aquele e-mail existia. O motivo
+ *   real continua gravado na auditoria, onde so o administrador le.
+ * - Custo de tempo equalizado entre e-mail existente e inexistente
+ *   (DUMMY_HASH acima).
  */
 authRoutes.post(
   '/login',
   asyncHandler(async (req, res) => {
     const { email, password } = loginSchema.parse(req.body);
+    const ip = clientIp(req);
+
+    // Regra 2: bloqueado nao passa, nem com a senha correta.
+    await assertNotBlocked(email, ip);
 
     const user = await prisma.user.findUnique({ where: { email } });
 
-    if (!user) {
+    // Compara sempre, mesmo sem usuario, para o tempo de resposta nao
+    // denunciar a existencia da conta.
+    const passwordMatches = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+
+    const failureReason = !user
+      ? `Tentativa de login com e-mail inexistente: ${email}.`
+      : !passwordMatches
+        ? 'Tentativa de login com senha incorreta.'
+        : !user.isActive
+          ? 'Tentativa de login de usuario inativo.'
+          : null;
+
+    if (failureReason) {
       await recordLog(req, {
         action: AuditAction.LOGIN_FAILED,
-        actor: { email },
-        description: `Tentativa de login com e-mail inexistente: ${email}.`,
+        actor: user ?? { email },
+        description: failureReason,
       });
-      throw new UnauthorizedError('E-mail ou senha invalidos.');
+
+      // Contabiliza e, se estourar o limite, bloqueia e registra o bloqueio.
+      const blocked = await registerFailedAttempt(req, email, ip, user);
+
+      // Foi ESTA tentativa que estourou o limite: responde ja o 429, em vez
+      // de 401 agora e 429 so na proxima.
+      if (blocked) throw blockedError(blocked);
+
+      throw new UnauthorizedError(INVALID_CREDENTIALS);
     }
 
-    const passwordMatches = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordMatches) {
-      await recordLog(req, {
-        action: AuditAction.LOGIN_FAILED,
-        actor: user,
-        description: 'Tentativa de login com senha incorreta.',
-      });
-      throw new UnauthorizedError('E-mail ou senha invalidos.');
-    }
+    // Regra 3: sucesso zera os contadores.
+    await clearAttempts(email, ip);
 
-    if (!user.isActive) {
-      await recordLog(req, {
-        action: AuditAction.LOGIN_FAILED,
-        actor: user,
-        description: 'Tentativa de login de usuario inativo.',
-      });
-      throw new UnauthorizedError('Usuario inativo. Contate o administrador.');
-    }
-
-    const token = signToken(user);
+    const token = signToken(user!);
 
     await recordLog(req, {
       action: AuditAction.LOGIN,
-      actor: user,
+      actor: user!,
       description: 'Login realizado com sucesso.',
     });
 
-    res.json({ token, user: serializeUser(user) });
+    res.json({ token, user: serializeUser(user!) });
   }),
 );
 
@@ -185,6 +224,10 @@ authRoutes.post(
       entityId: user.id,
       description: 'Senha alterada pelo proprio usuario.',
     });
+
+    // Redefinir a senha e o caminho de volta do bloqueio por forca bruta -
+    // inclusive do degrau que exige liberacao manual.
+    await unlockAccount(user.email);
 
     // O JWT continua valido ate expirar (ele nao guarda a senha). Trocar a
     // senha nao encerra as demais sessoes - ver nota em docs/DOCUMENTATION.md.

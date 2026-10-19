@@ -26,6 +26,23 @@ export class ForbiddenError extends AppError {
   }
 }
 
+/**
+ * 429 - usado pela protecao contra forca bruta do login.
+ *
+ * Carrega os segundos restantes para o chamador montar o header Retry-After
+ * sem ter de reconsultar o contador.
+ */
+export class TooManyRequestsError extends AppError {
+  /** null quando o bloqueio nao tem prazo (exige liberacao manual). */
+  public readonly retryAfterSeconds: number | null;
+
+  constructor(message: string, retryAfterSeconds: number | null) {
+    super(message, 429);
+    this.name = 'TooManyRequestsError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message = 'Recurso nao encontrado.') {
     super(message, 404);
